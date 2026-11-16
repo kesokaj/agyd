@@ -15,8 +15,6 @@ import (
 	"agy-api/internal/acp"
 )
 
-const testToken = "test-bearer-secret-123"
-
 type fakeACPService struct {
 	mu       sync.Mutex
 	sessions map[string]acp.SessionInfo
@@ -170,7 +168,7 @@ func (f *fakeACPService) Close() error { return nil }
 
 func newTestMux(svc acp.Service) http.Handler {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	return NewHandler(log, svc, Config{Token: testToken, DefaultWorkspace: "/workspace"})
+	return NewHandler(log, svc, Config{DefaultWorkspace: "/workspace"})
 }
 
 func authReq(method, target, body string) *http.Request {
@@ -179,17 +177,16 @@ func authReq(method, target, body string) *http.Request {
 		r = strings.NewReader(body)
 	}
 	req := httptest.NewRequest(method, target, r)
-	req.Header.Set("Authorization", "Bearer "+testToken)
 	if body != "" {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	return req
 }
 
-func TestAuthMiddleware(t *testing.T) {
+func TestStatusAndHealthEndpoints(t *testing.T) {
 	mux := newTestMux(newFakeACPService())
 
-	t.Run("healthz is unauthenticated 204", func(t *testing.T) {
+	t.Run("healthz returns 204", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/healthz", nil))
 		if rec.Code != http.StatusNoContent {
@@ -197,30 +194,9 @@ func TestAuthMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("missing token is 401 AIP-193", func(t *testing.T) {
+	t.Run("status returns 200 without auth header", func(t *testing.T) {
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/v1/status", nil))
-		if rec.Code != http.StatusUnauthorized {
-			t.Fatalf("status = %d, want 401; body = %s", rec.Code, rec.Body)
-		}
-		if !strings.Contains(rec.Body.String(), `"reason":"INVALID_BEARER_TOKEN"`) {
-			t.Errorf("body = %s, want INVALID_BEARER_TOKEN", rec.Body)
-		}
-	})
-
-	t.Run("wrong token is 401", func(t *testing.T) {
-		req := httptest.NewRequest(http.MethodGet, "/v1/status", nil)
-		req.Header.Set("Authorization", "Bearer wrong-token")
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, req)
-		if rec.Code != http.StatusUnauthorized {
-			t.Errorf("status = %d, want 401", rec.Code)
-		}
-	})
-
-	t.Run("valid token returns 200 status", func(t *testing.T) {
-		rec := httptest.NewRecorder()
-		mux.ServeHTTP(rec, authReq(http.MethodGet, "/v1/status", ""))
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body)
 		}

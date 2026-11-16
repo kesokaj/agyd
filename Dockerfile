@@ -40,4 +40,4 @@ VOLUME ["/home/agy/.gemini"]
 WORKDIR /workspace
 EXPOSE 8080
 
-ENTRYPOINT ["/usr/local/bin/agy-api"]
+CMD ["/usr/local/bin/agy-api"]

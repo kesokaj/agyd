@@ -22,7 +22,6 @@ import (
 
 type appConfig struct {
 	Addr             string
-	Token            string
 	ACPBin           string
 	ACPArgs          []string
 	Workspace        string
@@ -66,11 +65,10 @@ func loadConfig(args []string, getenv func(string) string) (appConfig, error) {
 	if err := fs.Parse(args); err != nil {
 		return appConfig{}, fmt.Errorf("parsing flags: %w", err)
 	}
-
-	token := strings.TrimSpace(getenv("AGY_API_TOKEN"))
-	if token == "" {
-		return appConfig{}, errors.New("AGY_API_TOKEN environment variable is required")
+	if fs.NArg() > 0 {
+		return appConfig{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
+
 	policy, err := acp.ParsePermissionPolicy(*policyStr)
 	if err != nil {
 		return appConfig{}, err
@@ -82,7 +80,6 @@ func loadConfig(args []string, getenv func(string) string) (appConfig, error) {
 
 	return appConfig{
 		Addr:             strings.TrimSpace(*addr),
-		Token:            token,
 		ACPBin:           strings.TrimSpace(*acpBin),
 		ACPArgs:          strings.Fields(*acpArgs),
 		Workspace:        cleanWS,
@@ -136,7 +133,7 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.NewHandler(log, acpClient, api.Config{Token: cfg.Token, DefaultWorkspace: cfg.Workspace}),
+		Handler:           api.NewHandler(log, acpClient, api.Config{DefaultWorkspace: cfg.Workspace}),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

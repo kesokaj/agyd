@@ -8,7 +8,6 @@ services:
       - "127.0.0.1:8080:8080"
     environment:
       PORT: "8080"
-      AGY_API_TOKEN: "${AGY_API_TOKEN:?set AGY_API_TOKEN in environment}"
       AGY_ACP_BIN: "/home/agy/.local/bin/agy"
       AGY_ACP_ARGS: "${AGY_ACP_ARGS:-acp}"
       AGY_WORKSPACE: "/workspace"

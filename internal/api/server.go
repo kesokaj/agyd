@@ -2,7 +2,6 @@
 package api
 
 import (
-	"crypto/subtle"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -17,7 +16,6 @@ import (
 
 // Config holds HTTP server configuration.
 type Config struct {
-	Token            string
 	DefaultWorkspace string
 }
 
@@ -29,7 +27,7 @@ type server struct {
 
 type handlerFunc func(w http.ResponseWriter, r *http.Request) error
 
-// NewHandler constructs the authenticated HTTP mux for agy-api.
+// NewHandler constructs the HTTP mux for agy-api.
 func NewHandler(log *slog.Logger, svc acp.Service, cfg Config) http.Handler {
 	if log == nil {
 		log = slog.Default()
@@ -43,13 +41,13 @@ func NewHandler(log *slog.Logger, svc acp.Service, cfg Config) http.Handler {
 	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	})
-	mux.Handle("GET /v1/status", s.auth(s.adapt(s.handleStatus)))
-	mux.Handle("POST /v1/sessions", s.auth(s.adapt(s.handleCreateSession)))
-	mux.Handle("GET /v1/sessions", s.auth(s.adapt(s.handleListSessions)))
-	mux.Handle("GET /v1/sessions/{sessionId}", s.auth(s.adapt(s.handleGetSession)))
-	mux.Handle("POST /v1/sessions/{sessionId}/prompt", s.auth(s.adapt(s.handlePrompt)))
-	mux.Handle("POST /v1/sessions/{sessionId}/cancel", s.auth(s.adapt(s.handleCancel)))
-	mux.Handle("DELETE /v1/sessions/{sessionId}", s.auth(s.adapt(s.handleDeleteSession)))
+	mux.Handle("GET /v1/status", s.adapt(s.handleStatus))
+	mux.Handle("POST /v1/sessions", s.adapt(s.handleCreateSession))
+	mux.Handle("GET /v1/sessions", s.adapt(s.handleListSessions))
+	mux.Handle("GET /v1/sessions/{sessionId}", s.adapt(s.handleGetSession))
+	mux.Handle("POST /v1/sessions/{sessionId}/prompt", s.adapt(s.handlePrompt))
+	mux.Handle("POST /v1/sessions/{sessionId}/cancel", s.adapt(s.handleCancel))
+	mux.Handle("DELETE /v1/sessions/{sessionId}", s.adapt(s.handleDeleteSession))
 	return s.recoverMiddleware(mux)
 }
 
@@ -70,27 +68,6 @@ func (s *server) recoverMiddleware(next http.Handler) http.Handler {
 				})
 			}
 		}()
-		next.ServeHTTP(w, r)
-	})
-}
-
-func (s *server) auth(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		const prefix = "Bearer "
-		hdr := r.Header.Get("Authorization")
-		token := ""
-		if strings.HasPrefix(hdr, prefix) {
-			token = hdr[len(prefix):]
-		}
-		if s.cfg.Token == "" || token == "" || subtle.ConstantTimeCompare([]byte(token), []byte(s.cfg.Token)) != 1 {
-			writeError(w, &apiError{
-				Status: http.StatusUnauthorized,
-				Code:   "UNAUTHENTICATED",
-				Reason: "INVALID_BEARER_TOKEN",
-				Msg:    "missing or invalid bearer token",
-			})
-			return
-		}
 		next.ServeHTTP(w, r)
 	})
 }

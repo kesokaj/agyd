@@ -9,8 +9,8 @@ Implements: M1 · Spec: `SPEC-agy-api-acp-gateway`
 
 Wires CLI flags and environment variables, starts the `internal/acp` client, mounts the `internal/api` HTTP mux, and performs graceful shutdown on `SIGINT`/`SIGTERM`.
 
-- **Interfaces:** CLI binary `agy-api` accepting flags (`-addr`, `-acp-bin`, `-acp-args`, `-workspace`, `-permission-policy`) and environment overrides (`PORT`, `AGY_API_ADDR`, `AGY_API_TOKEN`, `AGY_ACP_BIN`, `AGY_ACP_ARGS`, `AGY_WORKSPACE`, `AGY_PERMISSION_POLICY`).
-- **Errors:** Exits non-zero (`1`) with a JSON `ERROR` log line if configuration validation fails (such as missing `AGY_API_TOKEN` or invalid `-permission-policy`) or the listener fails to bind.
+- **Interfaces:** CLI binary `agy-api` accepting flags (`-addr`, `-acp-bin`, `-acp-args`, `-workspace`, `-permission-policy`) and environment overrides (`PORT`, `AGY_API_ADDR`, `AGY_ACP_BIN`, `AGY_ACP_ARGS`, `AGY_WORKSPACE`, `AGY_PERMISSION_POLICY`).
+- **Errors:** Exits non-zero (`1`) with a JSON `ERROR` log line if configuration validation fails (such as unexpected positional arguments or invalid `-permission-policy`) or the listener fails to bind.
 - **Configuration:** All runtime paths (`/workspace`, `~/.gemini`) live outside the repository tree.
 
 ## T2 — `internal/acp` (ACP v1 JSON-RPC 2.0 Stdio Client)
@@ -27,11 +27,11 @@ Manages the child ACP agent process (`agy acp` or `claude-agent-acp`) over `stdi
 
 Implements: M3 · Spec: `SPEC-agy-api-acp-gateway`
 
-Serves the HTTP API (`GET /healthz`, `GET /v1/status`, `POST /v1/sessions`, `GET /v1/sessions`, `GET /v1/sessions/{sessionId}`, `POST /v1/sessions/{sessionId}/prompt`, `POST /v1/sessions/{sessionId}/cancel`, `DELETE /v1/sessions/{sessionId}`) with constant-time bearer authentication and AIP-193 error responses.
+Serves the HTTP API (`GET /healthz`, `GET /v1/status`, `POST /v1/sessions`, `GET /v1/sessions`, `GET /v1/sessions/{sessionId}`, `POST /v1/sessions/{sessionId}/prompt`, `POST /v1/sessions/{sessionId}/cancel`, `DELETE /v1/sessions/{sessionId}`) with AIP-193 error responses.
 
 - **Interfaces:** `NewHandler(log, acpClient, cfg) http.Handler`; supports both `Accept: text/event-stream` (SSE streaming `session_update`, `prompt_done`, `prompt_error`) and `Accept: application/json` (buffered response with collected updates and concatenated `agent_message_chunk` text).
 - **Errors:** AIP-193 JSON error envelope (`{"error":{"code":...,"status":...,"message":...,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":...,"domain":"agy-api.local"}]}}`).
-- **Configuration:** Bearer token string (`AGY_API_TOKEN`), default workspace directory (`AGY_WORKSPACE`), and request body size limit (`1 MiB`).
+- **Configuration:** Default workspace directory (`AGY_WORKSPACE`) and request body size limit (`1 MiB`).
 
 ## Data model
 
@@ -53,4 +53,4 @@ Every component in `SDD.md` maps to its technical design section and test suite.
 |---|---|---|
 | M1 | T1 | `cmd/agy-api` build + `TestConfigFromEnvAndFlags` |
 | M2 | T2 | `TestClientInitializeAndSessionLifecycle`, `TestClientPromptStreamingAndPermission`, `TestClientCancelAndCrashRecovery` |
-| M3 | T3 | `TestAuthMiddleware`, `TestSessionEndpoints`, `TestPromptSSEAndJSON`, `TestCancelEndpoint` |
+| M3 | T3 | `TestStatusAndHealthEndpoints`, `TestSessionEndpoints`, `TestPromptSSEAndJSON`, `TestCancelEndpoint` |

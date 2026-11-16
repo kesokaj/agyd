@@ -9,16 +9,25 @@ import (
 )
 
 func TestConfigFromEnvAndFlags(t *testing.T) {
-	t.Run("missing token fails validation", func(t *testing.T) {
-		_, err := loadConfig(nil, func(string) string { return "" })
-		if err == nil || !strings.Contains(err.Error(), "AGY_API_TOKEN") {
-			t.Fatalf("loadConfig err = %v, want missing AGY_API_TOKEN error", err)
+	t.Run("succeeds with empty env and no token", func(t *testing.T) {
+		cfg, err := loadConfig(nil, func(string) string { return "" })
+		if err != nil {
+			t.Fatalf("loadConfig with empty env err = %v, want nil", err)
+		}
+		if cfg.Addr != "127.0.0.1:8080" {
+			t.Errorf("Addr = %q, want 127.0.0.1:8080", cfg.Addr)
+		}
+	})
+
+	t.Run("unexpected positional arguments fail validation", func(t *testing.T) {
+		_, err := loadConfig([]string{"agy", "acp", "--login"}, func(string) string { return "" })
+		if err == nil || !strings.Contains(err.Error(), "unexpected") {
+			t.Fatalf("loadConfig positional args err = %v, want unexpected arguments error", err)
 		}
 	})
 
 	t.Run("env defaults and PORT fallback", func(t *testing.T) {
 		env := map[string]string{
-			"AGY_API_TOKEN":         "secret-123",
 			"PORT":                  "9090",
 			"AGY_PERMISSION_POLICY": "deny_all",
 		}
@@ -42,8 +51,7 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 
 	t.Run("flags override env vars", func(t *testing.T) {
 		env := map[string]string{
-			"AGY_API_TOKEN": "secret-123",
-			"AGY_API_ADDR":  "127.0.0.1:8080",
+			"AGY_API_ADDR": "127.0.0.1:8080",
 		}
 		args := []string{
 			"-addr=127.0.0.1:7070",
@@ -75,7 +83,6 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 
 	t.Run("invalid permission policy fails", func(t *testing.T) {
 		env := map[string]string{
-			"AGY_API_TOKEN":         "secret-123",
 			"AGY_PERMISSION_POLICY": "invalid_policy",
 		}
 		if _, err := loadConfig(nil, func(k string) string { return env[k] }); err == nil {

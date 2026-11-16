@@ -1,6 +1,6 @@
 # SDD — agy-api
 
-A single-binary Go HTTP/SSE gateway (`cmd/agy-api`) translates authenticated REST calls into Agent Client Protocol (ACP v1) JSON-RPC 2.0 messages over stdio to a warm `agy acp` subprocess inside a Docker container.
+A single-binary Go HTTP/SSE gateway (`cmd/agy-api`) translates REST calls into Agent Client Protocol (ACP v1) JSON-RPC 2.0 messages over stdio to a warm `agy acp` subprocess inside a Docker container.
 Status: draft · Last updated: 2026-11-16 · Requirements: [PRD.md](PRD.md) · Technical design: [TDD.md](TDD.md)
 
 ## Context
@@ -9,7 +9,7 @@ Status: draft · Last updated: 2026-11-16 · Requirements: [PRD.md](PRD.md) · T
 
 ```mermaid
 flowchart LR
-  Caller["Local HTTP Caller"] -->|"REST + SSE\nBearer Token"| M1["M1: cmd/agy-api"]
+  Caller["Local HTTP Caller"] -->|"REST + SSE"| M1["M1: cmd/agy-api"]
   M1 --> M3["M3: internal/api"]
   M3 --> M2["M2: internal/acp"]
   M2 -->|"ACP v1 NDJSON-RPC\nstdin / stdout"| Agy["agy acp\n(or claude-agent-acp)"]
@@ -25,7 +25,7 @@ Every package has one responsibility in the HTTP-to-ACP pipeline.
 |---|---|---|---|
 | M1 | `cmd/agy-api` | Binary entry point, flag/env parsing, `log/slog` setup, and graceful `SIGTERM` shutdown | — |
 | M2 | `internal/acp` | ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, `session/update` fan-out, and `session/request_permission` policy | — |
-| M3 | `internal/api` | `net/http` mux, bearer token authentication middleware, AIP-193 JSON error formatting, and SSE prompt streaming | — |
+| M3 | `internal/api` | `net/http` mux, AIP-193 JSON error formatting, and SSE prompt streaming | — |
 
 ## Flows
 
@@ -66,8 +66,8 @@ Architectural choices link to their ADR records (`fyr record get ADR-NNN`).
 
 Security, privacy, observability, and cost policies apply across all three components.
 
-- **Security:** Static bearer token (`AGY_API_TOKEN`) verified with `crypto/subtle.ConstantTimeCompare` on every `/v1/*` route; container runs as non-root `agy` (`UID 1000`), binds to host loopback `127.0.0.1:8080`, and stores credentials in a named volume (`agy-gemini-data`), never in image layers.
-- **Privacy:** Request bodies, prompts, and bearer tokens are never logged.
+- **Security:** Container runs as non-root `agy` (`UID 1000`), binds to host loopback `127.0.0.1:8080` (with access control handled externally), rejects `.gemini` paths in `cwd`, and stores credentials in a named volume (`agy-gemini-data`), never in image layers.
+- **Privacy:** Request bodies, prompts, and credentials are never logged.
 - **Observability:** Structured JSON logs on `stdout` via `log/slog` (`severity`, `message`, `timestamp`); `GET /healthz` and `GET /v1/status` report gateway and ACP child readiness.
 - **Cost:** Local container runtime only; zero cloud infrastructure cost.
 

@@ -19,7 +19,7 @@ go vet ./... && go test -race ./...
 
 ## Architecture
 
-`cmd/agy-api` starts a single-binary Go HTTP server bound to `127.0.0.1:8080` (or `0.0.0.0:8080` inside Docker published to host `127.0.0.1:8080`), authenticates requests with `Authorization: Bearer <AGY_API_TOKEN>`, and translates REST + SSE calls into ACP v1 JSON-RPC 2.0 messages over `stdin`/`stdout` of a managed `agy acp` subprocess (`internal/acp`). For ADRs: `fyr record list --kind adr`.
+`cmd/agy-api` starts a single-binary Go HTTP server bound to `127.0.0.1:8080` (or `0.0.0.0:8080` inside Docker published to host `127.0.0.1:8080`) and translates REST + SSE calls into ACP v1 JSON-RPC 2.0 messages over `stdin`/`stdout` of a managed `agy acp` subprocess (`internal/acp`). Access control is handled outside the application boundary. For ADRs: `fyr record list --kind adr`.
 
 ## Testing
 
@@ -35,7 +35,7 @@ Local only — see `DEPLOY-local` (`fyr record get DEPLOY-local`).
 |------|---------|
 | `cmd/agy-api/main.go` | Application entry point, flag/env config, signal handling |
 | `internal/acp/` | ACP v1 JSON-RPC 2.0 stdio client, session registry, permission policy |
-| `internal/api/` | HTTP/SSE handlers, bearer-token middleware, AIP-193 JSON errors |
+| `internal/api/` | HTTP/SSE handlers and AIP-193 JSON errors |
 | `Dockerfile` | Multi-stage Go build + `debian:bookworm-slim` runtime with `agy` CLI |
 | `docker-compose.yml` | Local container stack with `agy-gemini-data` volume and `/workspace` mount |
 | `PRD.md` | What and why: problem, goals, the non-negotiable requirements |
