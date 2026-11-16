@@ -1,8 +1,0 @@
-.git
-.agents
-.env
-.env.*
-*.pem
-*.key
-*.md
-dist

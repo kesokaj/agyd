@@ -1,4 +1,4 @@
-// Command agy-api runs the HTTP + SSE gateway in front of an ACP stdio agent (agy acp).
+// Command agyd runs the HTTP + SSE gateway in front of an ACP stdio agent (agy acp) with Swagger docs.
 package main
 
 import (
@@ -8,8 +8,10 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -17,7 +19,6 @@ import (
 	"time"
 
 	"agy-api/internal/acp"
-	"agy-api/internal/api"
 )
 
 type appConfig struct {
@@ -28,36 +29,36 @@ type appConfig struct {
 	PermissionPolicy acp.PermissionPolicy
 }
 
-func loadConfig(args []string, getenv func(string) string) (appConfig, error) {
-	defaultAddr := getenv("AGY_API_ADDR")
+func loadConfig(args []string, getenv func(string) string, getwd func() (string, error), lookPath func(string) (string, error)) (appConfig, error) {
+	defaultAddr := getenv("AGYD_ADDR")
 	if defaultAddr == "" {
-		if port := getenv("PORT"); port != "" {
-			defaultAddr = ":" + port
-		} else {
-			defaultAddr = "127.0.0.1:8080"
-		}
+		defaultAddr = "127.0.0.1:8080"
 	}
-	defaultBin := getenv("AGY_ACP_BIN")
+	defaultBin := getenv("AGYD_AGY")
 	if defaultBin == "" {
 		defaultBin = "agy"
 	}
-	defaultArgs := getenv("AGY_ACP_ARGS")
+	defaultArgs := getenv("AGYD_ACP_ARGS")
 	if defaultArgs == "" {
 		defaultArgs = "acp"
 	}
-	defaultWS := getenv("AGY_WORKSPACE")
+	defaultWS := getenv("AGYD_WORKSPACE")
 	if defaultWS == "" {
-		defaultWS = "/workspace"
+		wd, err := getwd()
+		if err != nil {
+			return appConfig{}, fmt.Errorf("getting current directory: %w", err)
+		}
+		defaultWS = wd
 	}
-	defaultPolicy := getenv("AGY_PERMISSION_POLICY")
+	defaultPolicy := getenv("AGYD_PERMISSION_POLICY")
 	if defaultPolicy == "" {
 		defaultPolicy = "allow_all"
 	}
 
-	fs := flag.NewFlagSet("agy-api", flag.ContinueOnError)
+	fs := flag.NewFlagSet("agyd", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	addr := fs.String("addr", defaultAddr, "HTTP listen address")
-	acpBin := fs.String("acp-bin", defaultBin, "ACP agent executable")
+	acpBin := fs.String("agy", defaultBin, "ACP agent executable")
 	acpArgs := fs.String("acp-args", defaultArgs, "space-separated arguments for ACP agent")
 	workspace := fs.String("workspace", defaultWS, "default session working directory")
 	policyStr := fs.String("permission-policy", defaultPolicy, "permission policy (allow_all or deny_all)")
@@ -67,6 +68,19 @@ func loadConfig(args []string, getenv func(string) string) (appConfig, error) {
 	}
 	if fs.NArg() > 0 {
 		return appConfig{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
+	}
+
+	host, _, err := net.SplitHostPort(strings.TrimSpace(*addr))
+	if err != nil {
+		return appConfig{}, fmt.Errorf("invalid addr %q: want host:port, e.g. 127.0.0.1:8080", *addr)
+	}
+	host = strings.ToLower(host)
+	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
+		return appConfig{}, fmt.Errorf("invalid addr %q: must be loopback (127.0.0.1, localhost, or ::1)", host)
+	}
+
+	if _, err := lookPath(*acpBin); err != nil {
+		return appConfig{}, fmt.Errorf("agy not found on PATH; install agy-cli or pass -agy /path/to/agy")
 	}
 
 	policy, err := acp.ParsePermissionPolicy(*policyStr)
@@ -133,7 +147,7 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           api.NewHandler(log, acpClient, api.Config{DefaultWorkspace: cfg.Workspace}),
+		Handler:           newMux(log, acpClient, cfg.Workspace),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
@@ -142,7 +156,8 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 
 	errc := make(chan error, 1)
 	go func() { errc <- srv.ListenAndServe() }()
-	log.Info("listening", "addr", cfg.Addr, "acpBin", cfg.ACPBin, "workspace", cfg.Workspace)
+
+	log.Info("listening", "addr", cfg.Addr, "url", "http://"+cfg.Addr, "acpBin", cfg.ACPBin, "workspace", cfg.Workspace)
 
 	select {
 	case err := <-errc:
@@ -163,7 +178,7 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 
 func main() {
 	log := newLogger(os.Stdout)
-	cfg, err := loadConfig(os.Args[1:], os.Getenv)
+	cfg, err := loadConfig(os.Args[1:], os.Getenv, os.Getwd, exec.LookPath)
 	if err != nil {
 		log.Error("configuration error", "err", err)
 		os.Exit(1)

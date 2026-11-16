@@ -200,12 +200,18 @@ func TestStatusAndHealthEndpoints(t *testing.T) {
 		if rec.Code != http.StatusOK {
 			t.Fatalf("status = %d, want 200; body = %s", rec.Code, rec.Body)
 		}
-		var st acp.Status
+		var st struct {
+			acp.Status
+			Workspace string `json:"workspace"`
+		}
 		if err := json.Unmarshal(rec.Body.Bytes(), &st); err != nil {
 			t.Fatalf("unmarshal: %v", err)
 		}
 		if !st.Ready || st.ProtocolVersion != 1 {
 			t.Errorf("status = %+v, want Ready=true ProtocolVersion=1", st)
+		}
+		if st.Workspace != "/workspace" {
+			t.Errorf("workspace = %q, want /workspace", st.Workspace)
 		}
 	})
 }

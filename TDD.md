@@ -1,17 +1,17 @@
 # TDD — agy-api
 
-Technical design for `cmd/agy-api`, `internal/acp`, and `internal/api`, linking each component to `SPEC-agy-api-acp-gateway` and its verification tests.
-Status: draft · Last updated: 2026-11-16 · Requirements: [PRD.md](PRD.md) · Design: [SDD.md](SDD.md)
+Technical design for `cmd/agyd`, `internal/acp`, `internal/api`, and `internal/web`, linking each component to `SPEC-agy-api-acp-gateway` and its verification tests.
+Status: agreed · Last updated: 2026-11-16 · Requirements: [PRD.md](PRD.md) · Design: [SDD.md](SDD.md)
 
-## T1 — `cmd/agy-api` (Entry Point & Process Wiring)
+## T1 — `cmd/agyd` (Entry Point, Config, & Process Wiring)
 
 Implements: M1 · Spec: `SPEC-agy-api-acp-gateway`
 
-Wires CLI flags and environment variables, starts the `internal/acp` client, mounts the `internal/api` HTTP mux, and performs graceful shutdown on `SIGINT`/`SIGTERM`.
+Wires CLI flags and environment variables, validates loopback binding and host binary availability, starts the `internal/acp` client, composes `internal/web` and `internal/api` routes wrapped with `api.Guard`, and executes graceful shutdown on `SIGINT`/`SIGTERM`.
 
-- **Interfaces:** CLI binary `agy-api` accepting flags (`-addr`, `-acp-bin`, `-acp-args`, `-workspace`, `-permission-policy`) and environment overrides (`PORT`, `AGY_API_ADDR`, `AGY_ACP_BIN`, `AGY_ACP_ARGS`, `AGY_WORKSPACE`, `AGY_PERMISSION_POLICY`).
-- **Errors:** Exits non-zero (`1`) with a JSON `ERROR` log line if configuration validation fails (such as unexpected positional arguments or invalid `-permission-policy`) or the listener fails to bind.
-- **Configuration:** All runtime paths (`/workspace`, `~/.gemini`) live outside the repository tree.
+- **Interfaces:** CLI binary `agyd` accepting flags (`-addr`, `-agy`, `-acp-args`, `-workspace`, `-permission-policy`) and environment overrides (`AGYD_ADDR`, `AGYD_AGY`, `AGYD_ACP_ARGS`, `AGYD_WORKSPACE`, `AGYD_PERMISSION_POLICY`).
+- **Errors:** Exits `1` with a JSON `ERROR` log line if configuration validation fails (non-loopback `-addr`, invalid `-permission-policy`, positional arguments, or missing `agy` executable on `$PATH`).
+- **Configuration:** Workspace defaults to `os.Getwd()`. Address defaults to `127.0.0.1:8080`.
 
 ## T2 — `internal/acp` (ACP v1 JSON-RPC 2.0 Stdio Client)
 
@@ -23,19 +23,31 @@ Manages the child ACP agent process (`agy acp` or `claude-agent-acp`) over `stdi
 - **Errors:** Translates JSON-RPC error objects (`code`, `message`, `data`), context cancellations, and unexpected child exits into typed Go errors (`*RPCError`, `ErrProcessClosed`, `ErrSessionNotFound`, `ErrPromptInFlight`).
 - **Configuration:** Configurable binary path, arguments, working directory, and permission policy (`ALLOW_ALL` vs `DENY_ALL`).
 
-## T3 — `internal/api` (REST + SSE HTTP Gateway)
+## T3 — `internal/api` (REST + SSE HTTP Gateway & Security Guard)
 
 Implements: M3 · Spec: `SPEC-agy-api-acp-gateway`
 
-Serves the HTTP API (`GET /healthz`, `GET /v1/status`, `POST /v1/sessions`, `GET /v1/sessions`, `GET /v1/sessions/{sessionId}`, `POST /v1/sessions/{sessionId}/prompt`, `POST /v1/sessions/{sessionId}/cancel`, `DELETE /v1/sessions/{sessionId}`) with AIP-193 error responses.
+Serves the HTTP API (`GET /healthz`, `GET /v1/status`, `POST /v1/sessions`, `GET /v1/sessions`, `GET /v1/sessions/{sessionId}`, `POST /v1/sessions/{sessionId}/prompt`, `POST /v1/sessions/{sessionId}/cancel`, `DELETE /v1/sessions/{sessionId}`) with AIP-193 error responses. Defines the route table and security middleware.
 
-- **Interfaces:** `NewHandler(log, acpClient, cfg) http.Handler`; supports both `Accept: text/event-stream` (SSE streaming `session_update`, `prompt_done`, `prompt_error`) and `Accept: application/json` (buffered response with collected updates and concatenated `agent_message_chunk` text).
+- **Interfaces:**
+  - `NewHandler(log, acpClient, cfg) http.Handler`: mounts API routes and handles both `Accept: text/event-stream` and `Accept: application/json`.
+  - `Guard(next http.Handler) http.Handler`: validates Host headers against loopback targets (`localhost`, `127.0.0.1`, `::1`) returning `403 FORBIDDEN_HOST` on mismatch, and applies `http.CrossOriginProtection` against cross-site requests.
+  - `Routes []Route`: exported list of registered API routes tested against `openapi.json`.
 - **Errors:** AIP-193 JSON error envelope (`{"error":{"code":...,"status":...,"message":...,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":...,"domain":"agy-api.local"}]}}`).
-- **Configuration:** Default workspace directory (`AGY_WORKSPACE`) and request body size limit (`1 MiB`).
+- **Configuration:** Default workspace directory (`AGYD_WORKSPACE`) and request body size limit (`1 MiB`).
+
+## T4 — `internal/web` (Swagger UI & OpenAPI Documentation)
+
+Implements: M4 · Spec: `SPEC-agy-api-acp-gateway`
+
+Serves the vendored Swagger UI static distribution (pinned version 5.35.0) and hand-written OpenAPI 3.1 specification embedded via `//go:embed`.
+
+- **Interfaces:** `Register(mux *http.ServeMux)` mounts `GET /{$}` (302 redirect to `/docs`), `GET /docs` (Swagger UI HTML), `GET /openapi.json` (OpenAPI specification), and `GET /static/*` (vendored CSS/JS assets).
+- **Security headers:** Injects `Content-Security-Policy: default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'` and `X-Content-Type-Options: nosniff`. Zero inline scripts; Swagger initialization runs from `docs.js`.
 
 ## Data model
 
-Session metadata (`sessionId`, `cwd`, `backend`, `createTime`, `modes`, `models`, `configOptions`) is held in-memory in `internal/acp` and persisted on disk by `agy acp` inside the mounted `/home/agy/.gemini` volume; `agy-api` owns no database.
+Session metadata (`sessionId`, `cwd`, `backend`, `createTime`, `modes`, `models`, `configOptions`) is held in-memory in `internal/acp` and persisted on disk by `agy acp` inside host `~/.gemini`; `agyd` owns no database.
 
 ## Testing strategy
 
@@ -51,6 +63,7 @@ Every component in `SDD.md` maps to its technical design section and test suite.
 
 | Component | Section | Verified by |
 |---|---|---|
-| M1 | T1 | `cmd/agy-api` build + `TestConfigFromEnvAndFlags` |
+| M1 | T1 | `cmd/agyd` build, `TestConfigFromEnvAndFlags`, `TestMuxUnknownPathJSON` |
 | M2 | T2 | `TestClientInitializeAndSessionLifecycle`, `TestClientPromptStreamingAndPermission`, `TestClientCancelAndCrashRecovery` |
-| M3 | T3 | `TestStatusAndHealthEndpoints`, `TestSessionEndpoints`, `TestPromptSSEAndJSON`, `TestCancelEndpoint` |
+| M3 | T3 | `TestStatusAndHealthEndpoints`, `TestSessionEndpoints`, `TestPromptSSEAndJSON`, `TestCancelEndpoint`, `TestGuard` |
+| M4 | T4 | `TestWebRoutes`, `TestOpenAPISpecMatchesRoutes` |

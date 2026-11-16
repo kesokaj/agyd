@@ -1,0 +1,545 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "agyd",
+    "version": "0.1.0",
+    "description": "Local HTTP/SSE API wrapping agy-cli"
+  },
+  "servers": [
+    {
+      "url": "/"
+    }
+  ],
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Health check",
+        "responses": {
+          "204": {
+            "description": "OK"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      }
+    },
+    "/v1/status": {
+      "get": {
+        "summary": "Get status",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StatusResponse"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/sessions": {
+      "get": {
+        "summary": "List sessions",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListSessionsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create session",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateSessionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}": {
+      "get": {
+        "summary": "Get session",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SessionInfo"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Delete session",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/prompt": {
+      "post": {
+        "summary": "Send prompt",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResult"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "SSE stream with events: session_update (raw ACP session updates), prompt_done (PromptResult), prompt_error (Error envelope)"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Bad Request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/sessions/{sessionId}/cancel": {
+      "post": {
+        "summary": "Cancel prompt",
+        "parameters": [
+          {
+            "name": "sessionId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "sessionId": {
+                      "type": "string"
+                    },
+                    "state": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "description": "Not Found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Error"
+                }
+              }
+            }
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "StatusResponse": {
+        "type": "object",
+        "properties": {
+          "ready": {
+            "type": "boolean"
+          },
+          "protocolVersion": {
+            "type": "integer"
+          },
+          "backend": {
+            "type": "string"
+          },
+          "agentInfo": {
+            "type": "object",
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "version": {
+                "type": "string"
+              }
+            }
+          },
+          "permissionPolicy": {
+            "type": "string"
+          },
+          "activeSessionCount": {
+            "type": "integer"
+          },
+          "workspace": {
+            "type": "string"
+          }
+        }
+      },
+      "SessionInfo": {
+        "type": "object",
+        "required": [
+          "sessionId",
+          "cwd",
+          "backend",
+          "createTime"
+        ],
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "cwd": {
+            "type": "string",
+            "description": "Absolute working directory of the session"
+          },
+          "backend": {
+            "type": "string",
+            "example": "agy"
+          },
+          "createTime": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "modes": {
+            "description": "Raw ACP session modes, passed through from the agent"
+          },
+          "models": {
+            "description": "Raw ACP model state, passed through from the agent"
+          },
+          "configOptions": {
+            "description": "Raw ACP config options, passed through from the agent"
+          }
+        }
+      },
+      "ListSessionsResponse": {
+        "type": "object",
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SessionInfo"
+            }
+          }
+        }
+      },
+      "CreateSessionRequest": {
+        "type": "object",
+        "properties": {
+          "cwd": {
+            "type": "string"
+          }
+        }
+      },
+      "PromptRequest": {
+        "type": "object",
+        "properties": {
+          "prompt": {
+            "type": "string"
+          }
+        }
+      },
+      "PromptResult": {
+        "type": "object",
+        "properties": {
+          "sessionId": {
+            "type": "string"
+          },
+          "stopReason": {
+            "type": "string"
+          },
+          "text": {
+            "type": "string"
+          },
+          "updates": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          },
+          "usage": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "integer"
+              },
+              "status": {
+                "type": "string"
+              },
+              "message": {
+                "type": "string"
+              },
+              "details": {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "additionalProperties": true
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "Forbidden": {
+        "description": "Host not allowed (FORBIDDEN_HOST, JSON) or cross-origin browser request (blocked by CSRF protection, plain text)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "agy is not logged in (ACP_AUTH_REQUIRED); run `agy` once to log in",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "BadGateway": {
+        "description": "ACP agent returned an RPC error or the agy process exited (ACP_RPC_ERROR, ACP_PROCESS_EXITED)",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Internal": {
+        "description": "Internal error",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  }
+}

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"runtime/debug"
 	"strings"
@@ -25,29 +26,55 @@ type server struct {
 	cfg Config
 }
 
-type handlerFunc func(w http.ResponseWriter, r *http.Request) error
+// Guard applies the Host guard and CrossOriginProtection to the mux.
+func Guard(next http.Handler) http.Handler {
+	csrf := http.NewCrossOriginProtection()
+	csrfHandler := csrf.Handler(next)
+
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.Host)
+		if err != nil {
+			host = r.Host
+		}
+		host = strings.TrimPrefix(host, "[")
+		host = strings.TrimSuffix(host, "]")
+		host = strings.ToLower(host)
+
+		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+			writeError(w, &apiError{
+				Status: http.StatusForbidden,
+				Code:   "PERMISSION_DENIED",
+				Reason: "FORBIDDEN_HOST",
+				Msg:    "Host not allowed",
+			})
+			return
+		}
+		csrfHandler.ServeHTTP(w, r)
+	})
+}
 
 // NewHandler constructs the HTTP mux for agy-api.
 func NewHandler(log *slog.Logger, svc acp.Service, cfg Config) http.Handler {
 	if log == nil {
 		log = slog.Default()
 	}
-	if cfg.DefaultWorkspace == "" {
-		cfg.DefaultWorkspace = "/workspace"
-	}
 	s := &server{log: log, svc: svc, cfg: cfg}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("GET /healthz", func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusNoContent)
+	for _, r := range s.routes() {
+		mux.Handle(r.Method+" "+r.Pattern, s.adapt(r.handler))
+	}
+
+	// Default handler for 404s
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, &apiError{
+			Status: http.StatusNotFound,
+			Code:   "NOT_FOUND",
+			Reason: "NOT_FOUND",
+			Msg:    "Not found",
+		})
 	})
-	mux.Handle("GET /v1/status", s.adapt(s.handleStatus))
-	mux.Handle("POST /v1/sessions", s.adapt(s.handleCreateSession))
-	mux.Handle("GET /v1/sessions", s.adapt(s.handleListSessions))
-	mux.Handle("GET /v1/sessions/{sessionId}", s.adapt(s.handleGetSession))
-	mux.Handle("POST /v1/sessions/{sessionId}/prompt", s.adapt(s.handlePrompt))
-	mux.Handle("POST /v1/sessions/{sessionId}/cancel", s.adapt(s.handleCancel))
-	mux.Handle("DELETE /v1/sessions/{sessionId}", s.adapt(s.handleDeleteSession))
+
 	return s.recoverMiddleware(mux)
 }
 
@@ -81,12 +108,21 @@ func (s *server) adapt(h handlerFunc) http.Handler {
 	})
 }
 
+type statusResponse struct {
+	acp.Status
+	Workspace string `json:"workspace"`
+}
+
 func (s *server) handleStatus(w http.ResponseWriter, r *http.Request) error {
 	st, err := s.svc.Status(r.Context())
 	if err != nil {
 		return err
 	}
-	writeJSON(w, http.StatusOK, st)
+	res := statusResponse{
+		Status:    st,
+		Workspace: s.cfg.DefaultWorkspace,
+	}
+	writeJSON(w, http.StatusOK, res)
 	return nil
 }
 
