@@ -1,0 +1,10 @@
+.DS_Store
+.env
+.env.*
+*.pem
+*.key
+agy-api
+dist/
+.agents/memory
+.agents/scratch/*
+!.agents/scratch/.gitkeep
