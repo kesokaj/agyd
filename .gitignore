@@ -3,7 +3,7 @@
 .env.*
 *.pem
 *.key
-agy-api
+/agy-api
 dist/
 .agents/memory
 .agents/scratch/*

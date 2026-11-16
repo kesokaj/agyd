@@ -51,7 +51,7 @@ The same commands are the contract in `AGENTS.md` § Setup Commands; the `GUIDE-
 
 ## Architecture
 
-`cmd/agy-api` starts an HTTP server on port `8080` and supervises an ACP v1 child process (`agy acp --dangerously-skip-permissions` by default inside the container). `internal/acp` multiplexes JSON-RPC 2.0 calls over `stdin`/`stdout`, routes `session/update` notifications to the active caller, and answers `session/request_permission` callbacks according to policy. `internal/api` enforces bearer-token authentication and streams updates as SSE (`text/event-stream`) or aggregated JSON (`application/json`).
+`cmd/agy-api` starts an HTTP server on port `8080` and supervises an ACP v1 child process (`agy acp` by default). `internal/acp` multiplexes JSON-RPC 2.0 calls over `stdin`/`stdout`, routes `session/update` notifications to the active caller, and answers `session/request_permission` callbacks according to policy (`ALLOW_ALL` by default). `internal/api` enforces bearer-token authentication and streams updates as SSE (`text/event-stream`) or aggregated JSON (`application/json`).
 
 ```
 cmd/agy-api/      # the binary: flags, env config, wiring, graceful shutdown
@@ -67,12 +67,11 @@ Flags and environment variables read by `cmd/agy-api`, with their defaults:
 | Setting | Flag / env | Default |
 |---|---|---|
 | Listen address | `-addr` / `AGY_API_ADDR` (or `PORT`) | `127.0.0.1:8080` (`:8080` when `PORT` is set) |
-| Bearer token | `AGY_API_TOKEN` | None (required unless `-allow-unauthenticated` is set) |
+| Bearer token | `AGY_API_TOKEN` | None (required) |
 | ACP binary | `-acp-bin` / `AGY_ACP_BIN` | `agy` |
 | ACP arguments | `-acp-args` / `AGY_ACP_ARGS` | `acp` |
 | Default workspace | `-workspace` / `AGY_WORKSPACE` | `/workspace` |
 | Permission policy | `-permission-policy` / `AGY_PERMISSION_POLICY` | `allow_all` |
-| Allow unauthenticated | `-allow-unauthenticated` / `AGY_ALLOW_UNAUTHENTICATED` | `false` |
 
 ## Deploy
 
