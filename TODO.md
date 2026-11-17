@@ -15,8 +15,4 @@ Phase 2 — `agyd` host binary with Swagger docs, Docker removed (`PLAN-2026-11-
 
 ## Next
 
-- Add `claude-agent-acp` as a second backend behind `-agy`/`-acp-args` (ACP seam already in place)
-
 ## Backlog
-
-- Add multi-backend profile selector (`agy` vs `claude-agent-acp`) per session request (added 2026-11-16, user request)
