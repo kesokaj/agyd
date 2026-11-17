@@ -1,6 +1,6 @@
 # PRD — agy-api
 
-Expose an installed `agy-cli` (and future ACP-compatible coding agents such as Claude Code) as a local HTTP/SSE API with Swagger docs, shipped as one host binary (`agyd`) that reuses the CLI's existing login.
+Expose an installed `agy-cli` as a local HTTP/SSE API with Swagger docs, shipped as one host binary (`agyd`) that reuses the CLI's existing login.
 Status: draft · Owner: spgo · Last updated: 2026-11-16 · Design: [SDD.md](SDD.md) · Technical design: [TDD.md](TDD.md)
 
 <!-- Read before every significant change. Immutable without the user's explicit approval of the exact text:

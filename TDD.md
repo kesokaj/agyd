@@ -17,7 +17,7 @@ Wires CLI flags and environment variables, validates loopback binding and host b
 
 Implements: M2 · Spec: `SPEC-agy-api-acp-gateway`
 
-Manages the child ACP agent process (`agy acp` or `claude-agent-acp`) over `stdin`/`stdout` NDJSON-RPC 2.0, multiplexing concurrent RPC calls, streaming `session/update` notifications to active session subscribers, answering agent-initiated `session/request_permission` requests, and lazily respawning the child process if it exits unexpectedly.
+Manages the child ACP agent process (`agy acp`) over `stdin`/`stdout` NDJSON-RPC 2.0, multiplexing concurrent RPC calls, streaming `session/update` notifications to active session subscribers, answering agent-initiated `session/request_permission` requests, and lazily respawning the child process if it exits unexpectedly.
 
 - **Interfaces:** `Client` (`Start`, `Close`, `Status`, `NewSession`, `GetSession`, `ListSessions`, `CloseSession`, `Prompt`, `Cancel`).
 - **Errors:** Translates JSON-RPC error objects (`code`, `message`, `data`), context cancellations, and unexpected child exits into typed Go errors (`*RPCError`, `ErrProcessClosed`, `ErrSessionNotFound`, `ErrPromptInFlight`).

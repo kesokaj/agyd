@@ -4,6 +4,7 @@
 *.pem
 *.key
 /agy-api
+/agyd
 dist/
 .agents/memory
 .agents/scratch/*

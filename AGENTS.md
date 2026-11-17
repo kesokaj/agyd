@@ -2,7 +2,7 @@
 
 ## Project Overview
 
-`agyd` exposes an installed Antigravity CLI (`agy`) over a local HTTP + Server-Sent Events (SSE) API with interactive Swagger docs by bridging HTTP requests to an `agy acp` (Agent Client Protocol v1 over stdio) child process on the host. It reuses the operator's existing `~/.gemini` login, and the ACP stdio seam allows swapping or adding `@agentclientprotocol/claude-agent-acp` for Claude Code later.
+`agyd` exposes an installed Antigravity CLI (`agy`) over a local HTTP + Server-Sent Events (SSE) API with interactive Swagger docs by bridging HTTP requests to an `agy acp` (Agent Client Protocol v1 over stdio) child process on the host. It reuses the operator's existing `~/.gemini` login. Scope is `agy-cli` only (ADR-003).
 
 ## Setup Commands
 
