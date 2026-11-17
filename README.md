@@ -1,129 +1,172 @@
 # agyd
 
-`agyd` exposes an installed Antigravity CLI (`agy`) as a local HTTP and Server-Sent Events (SSE) API with interactive Swagger documentation. It bridges HTTP requests to a warm `agy acp` (Agent Client Protocol v1 over stdio) child process on the host and reuses your existing `~/.gemini` login.
+**An HTTP API in front of the `agy` CLI you already have installed.** Run one binary and you get a REST + Server-Sent Events (SSE) API and Swagger docs at `http://127.0.0.1:8080/docs`. It reuses your existing `agy` login: no Docker, no API keys, no extra setup.
 
 ```mermaid
 flowchart LR
-  Client["Caller / Browser\n127.0.0.1:8080"] -->|"HTTP + SSE"| Guard["Host Guard & CSRF\napi.Guard"]
-  Guard --> Web["Swagger UI & Spec\ninternal/web (/docs)"]
-  Guard --> API["REST + SSE API\ninternal/api (/v1/*)"]
-  API -->|"ACP v1 JSON-RPC 2.0\nstdin / stdout"| ACP["internal/acp"]
-  ACP --> Child["Host agy acp\n(reusing ~/.gemini login)"]
-  Child -.->|"Read / Write / Shell"| WS["Workspace\n(cwd)"]
+  You["curl / scripts / Swagger UI"] -->|"HTTP + SSE"| agyd["agyd<br/>127.0.0.1:8080"]
+  agyd -->|"ACP over stdio"| agy["agy acp<br/>(your ~/.gemini login)"]
+  agy -.->|"reads, writes, runs"| WS["your workspace"]
 ```
 
 ## Quick start
 
-The standard build and verification commands:
+You need **Go 1.27+** and a working **`agy`** on your `PATH`, already signed in. If `agy` runs interactively in your terminal, you're set.
 
 ```bash
-go build ./cmd/agyd
-go run ./cmd/agyd
-go vet ./... && go test -race ./...
-```
-
-These commands match `AGENTS.md` § Setup Commands; verification tiers are detailed in `GUIDE-testing` (`fyr record get GUIDE-testing`).
-
-## Install and run
-
-Install `agyd` into `$GOPATH/bin`:
-
-```bash
-go install ./cmd/agyd
-```
-
-Or build the binary directly:
-
-```bash
-go build -o agyd ./cmd/agyd
-```
-
-Prerequisites:
-- `agy` CLI installed on your `$PATH` (or specified via `-agy`).
-- An active `~/.gemini` login. If you have not logged in yet, run `agy` once interactively on the host. `agyd` requires no login command.
-
-Start the daemon:
-
-```bash
+gh repo clone kesokaj/agyd && cd agyd
+go install ./cmd/agyd        # installs to $(go env GOPATH)/bin
+cd ~/code/my-project         # the folder the agent should work in
 agyd
 ```
 
-By default, `agyd` listens on `http://127.0.0.1:8080` and uses your current working directory as the default workspace.
+Then open **http://127.0.0.1:8080/docs**. Under any endpoint, click **Try it out** to call the API from the browser.
 
-## Browser documentation
+> [!IMPORTANT]
+> The agent works in the folder you start `agyd` from, unless you set `-workspace` or pass `cwd` when you create a session. By default it approves its own tool calls (file writes, shell commands). See [Safety](#safety).
 
-Open `http://127.0.0.1:8080/docs` in your browser (navigating to `http://127.0.0.1:8080/` redirects to `/docs`).
+## How a conversation works
 
-`agyd` serves vendored Swagger UI assets from memory and provides the OpenAPI 3.1 specification at `GET /openapi.json`. You can use Swagger UI's **Try it out** feature as your primary manual testing surface.
+A **session** is one conversation with the agent in one folder. You create it once, then send prompts to it one turn at a time.
 
-## Curl and jq examples
-
-### Check status
-
-```bash
-curl -fsS http://127.0.0.1:8080/v1/status | jq .
+```mermaid
+sequenceDiagram
+  participant C as You
+  participant D as agyd
+  participant A as agy acp
+  C->>D: POST /v1/sessions
+  D->>A: session/new
+  D-->>C: 201 {sessionId}
+  C->>D: POST /v1/sessions/{id}/prompt
+  D->>A: session/prompt
+  A-->>D: updates (text, tool calls)
+  D-->>C: JSON when done, or a live SSE stream
+  C->>D: DELETE /v1/sessions/{id}
+  D-->>C: 204
 ```
 
-### Create a session
+### 1. Create a session
 
 ```bash
-SESSION_ID="$(curl -fsS -X POST http://127.0.0.1:8080/v1/sessions \
-  -H "Content-Type: application/json" \
-  -d "{\"cwd\":\"$(pwd)\"}" | jq -r .sessionId)"
+SESSION_ID=$(curl -fsS -X POST http://127.0.0.1:8080/v1/sessions \
+  -H 'Content-Type: application/json' -d '{}' | jq -r .sessionId)
 ```
 
-### Buffered prompt turn (JSON)
+The empty body `{}` uses the default workspace. To work somewhere else, send an absolute path: `{"cwd": "/Users/me/code/other"}`.
 
-Returns aggregated text output once the turn completes:
+### 2. Send a prompt and wait for the answer
 
 ```bash
 curl -fsS -X POST "http://127.0.0.1:8080/v1/sessions/$SESSION_ID/prompt" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"Summarize this repository in two sentences."}' | jq -r .text
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "Summarize this repository in two sentences."}' | jq -r .text
 ```
 
-### Streamed prompt turn (SSE)
+The response is one JSON object: `text` (the agent's full reply), `stopReason`, and the raw `updates`.
 
-Streams real-time session update events as the agent works:
+### 3. Or stream the answer live
+
+Add `Accept: text/event-stream` and the same call streams events while the agent works:
 
 ```bash
-curl -N -s -X POST "http://127.0.0.1:8080/v1/sessions/$SESSION_ID/prompt" \
-  -H "Accept: text/event-stream" \
-  -H "Content-Type: application/json" \
-  -d '{"prompt":"List top-level directories."}' \
-  | sed -un 's/^data: //p' | jq .
+curl -N -sS -X POST "http://127.0.0.1:8080/v1/sessions/$SESSION_ID/prompt" \
+  -H 'Accept: text/event-stream' -H 'Content-Type: application/json' \
+  -d '{"prompt": "List the top-level directories."}'
 ```
 
-## Security and permission policy
+| Event | When | `data` |
+|---|---|---|
+| `session_update` | Every chunk: text, thoughts, tool calls | The raw ACP update |
+| `prompt_done` | The turn finished | Same shape as the JSON response |
+| `prompt_error` | The turn failed | An error object |
 
-> [!WARNING]
-> By default, `agyd` runs with `-permission-policy allow_all`. Tool execution requests from the agent (shell execution, file writes) are approved automatically. To require manual approval rejection on all agent permission requests, pass `-permission-policy deny_all`.
+### 4. Keep talking, cancel, or clean up
 
-- **Loopback binding:** `agyd` strictly requires a loopback address (`127.0.0.1`, `localhost`, or `::1`). Non-loopback addresses or wildcards (such as `0.0.0.0`) are rejected at startup.
-- **Host guard:** The outer HTTP mux validates the `Host` header and returns `403 Forbidden` (`FORBIDDEN_HOST`) for any non-loopback host names, preventing DNS rebinding.
-- **CSRF protection:** All incoming mutating requests are protected by standard library `http.CrossOriginProtection` against cross-site requests.
-- **No in-app token:** Access control is enforced by loopback isolation, Host header verification, and CSRF protection.
+- **Follow-up:** send another prompt to the same `SESSION_ID`. The agent remembers the conversation.
+- **Stop a long turn:** `curl -X POST .../v1/sessions/$SESSION_ID/cancel`
+- **End the session:** `curl -X DELETE .../v1/sessions/$SESSION_ID`
+
+A session takes **one turn at a time**. A second prompt sent while one is running gets `409 PROMPT_IN_FLIGHT`.
+
+## Endpoints
+
+| Method | Path | What it does |
+|---|---|---|
+| `GET` | `/docs` | Swagger UI (`/` redirects here) |
+| `GET` | `/openapi.json` | OpenAPI 3.1 spec, for client generators |
+| `GET` | `/healthz` | Liveness: `204` |
+| `GET` | `/v1/status` | Agent readiness, version, policy, active session count |
+| `POST` | `/v1/sessions` | Create a session (`cwd` optional) |
+| `GET` | `/v1/sessions` | List sessions |
+| `GET` | `/v1/sessions/{id}` | One session |
+| `POST` | `/v1/sessions/{id}/prompt` | Run a turn: JSON, or SSE with `Accept: text/event-stream` |
+| `POST` | `/v1/sessions/{id}/cancel` | Cancel the running turn |
+| `DELETE` | `/v1/sessions/{id}` | End a session: `204` |
+
+<details>
+<summary>Errors</summary>
+
+Every error has the same shape (Google AIP-193):
+
+```json
+{"error": {"code": 409, "status": "ABORTED", "message": "a prompt turn is already in flight for this session", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "PROMPT_IN_FLIGHT", "domain": "agyd.local"}]}}
+```
+
+| HTTP | Reason | Meaning |
+|---|---|---|
+| 400 | `MALFORMED_BODY`, `INVALID_CWD` | Bad JSON, or `cwd` is not a clean absolute path (or is inside `.gemini`) |
+| 401 | `ACP_AUTH_REQUIRED` | `agy` is not signed in. Run `agy` once, or `agy acp --login` |
+| 403 | `FORBIDDEN_HOST` | The request's `Host` header is not loopback |
+| 404 | `SESSION_NOT_FOUND` | Unknown or deleted session |
+| 409 | `PROMPT_IN_FLIGHT` | That session is already running a turn |
+| 502 | `ACP_RPC_ERROR`, `ACP_PROCESS_EXITED` | `agy` returned an error or exited. It restarts on the next call |
+
+</details>
 
 ## Configuration
 
-Flags and environment variables read by `cmd/agyd`:
+Every setting works as a flag or an environment variable. The defaults suit a typical laptop.
 
-| Setting | Flag | Env var | Default |
+| Flag | Env var | Default | What it does |
 |---|---|---|---|
-| Listen address | `-addr` | `AGYD_ADDR` | `127.0.0.1:8080` (must be loopback) |
-| ACP agent binary | `-agy` | `AGYD_AGY` | `agy` |
-| ACP arguments | `-acp-args` | `AGYD_ACP_ARGS` | `acp` |
-| Default workspace | `-workspace` | `AGYD_WORKSPACE` | Current working directory (`os.Getwd()`) |
-| Permission policy | `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` (`allow_all` or `deny_all`) |
+| `-addr` | `AGYD_ADDR` | `127.0.0.1:8080` | Listen address. Must be loopback and include a port |
+| `-workspace` | `AGYD_WORKSPACE` | current folder | Default `cwd` for new sessions |
+| `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for agent tool calls |
+| `-agy` | `AGYD_AGY` | `agy` | Path to the `agy` binary |
+| `-acp-args` | `AGYD_ACP_ARGS` | `acp` | Arguments passed to `agy` |
 
-## Deploy
+```bash
+agyd -addr 127.0.0.1:9090 -workspace ~/code/sandbox -permission-policy deny_all
+```
 
-Local host execution only — see `DEPLOY-local` (`fyr record get DEPLOY-local`). Releases pass through `/fyr-preflight`.
+## Safety
 
-## Where things are
+`agyd` is built for **one person on their own machine**.
 
-- Architecture and design: [SDD.md](SDD.md) and [TDD.md](TDD.md)
-- Decisions: `fyr record list --kind adr` (`ADR-001`, `ADR-002`)
-- Surface specification: `fyr record get SPEC-agy-api-acp-gateway`
-- Verification procedures: `fyr record get GUIDE-testing`
-- Changes and bugs: `fyr record list --kind change`, `fyr record list --kind bug`
+> [!WARNING]
+> With the default `allow_all`, anything that can reach `127.0.0.1:8080` can make the agent write files and run shell commands **as you**. That includes other local programs. Use `-permission-policy deny_all` when you only need read-only answers, and point `-workspace` at a folder you're willing to let the agent change.
+
+- **Loopback only.** `agyd` refuses to start on `0.0.0.0` or any non-loopback address.
+- **Host check.** It rejects requests whose `Host` header isn't loopback (`403`). This blocks DNS-rebinding attacks.
+- **CSRF protection.** Browser requests from other websites are blocked.
+- **No token.** There is no API key. The protection is the loopback binding plus the two checks above.
+
+## Troubleshooting
+
+| Symptom | Fix |
+|---|---|
+| `401 ACP_AUTH_REQUIRED` | Sign in: run `agy` once in a terminal, then retry |
+| `GET /v1/status` returns `500` or `502` | `agy` failed to start. Check it is on `PATH`, or pass `-agy /full/path/to/agy`, and read `agyd`'s log |
+| `400 INVALID_CWD` | Use an absolute path that exists, e.g. `"$(pwd)"`, and that is not under `~/.gemini` |
+| `403 FORBIDDEN_HOST` | Call `127.0.0.1` or `localhost`, not your LAN IP or hostname |
+| `409 PROMPT_IN_FLIGHT` | Wait for the turn to finish, or `POST .../cancel` first |
+| Port already in use | `agyd -addr 127.0.0.1:9090` |
+
+## Development
+
+```bash
+go build ./cmd/agyd                 # build
+go vet ./... && go test -race ./... # test (no real agy needed)
+```
+
+Design docs: [SDD.md](SDD.md) (architecture) and [TDD.md](TDD.md) (components and tests). Decisions, specs and the testing guide live in the project trail: `fyr record list --kind adr`, `fyr record get GUIDE-testing`.
