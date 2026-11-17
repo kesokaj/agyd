@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"agy-api/internal/acp"
+	"agyd/internal/acp"
 )
 
 type appConfig struct {

@@ -33,7 +33,7 @@ Serves the HTTP API (`GET /healthz`, `GET /v1/status`, `POST /v1/sessions`, `GET
   - `NewHandler(log, acpClient, cfg) http.Handler`: mounts API routes and handles both `Accept: text/event-stream` and `Accept: application/json`.
   - `Guard(next http.Handler) http.Handler`: validates Host headers against loopback targets (`localhost`, `127.0.0.1`, `::1`) returning `403 FORBIDDEN_HOST` on mismatch, and applies `http.CrossOriginProtection` against cross-site requests.
   - `Routes []Route`: exported list of registered API routes tested against `openapi.json`.
-- **Errors:** AIP-193 JSON error envelope (`{"error":{"code":...,"status":...,"message":...,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":...,"domain":"agy-api.local"}]}}`).
+- **Errors:** AIP-193 JSON error envelope (`{"error":{"code":...,"status":...,"message":...,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":...,"domain":"agyd.local"}]}}`).
 - **Configuration:** Default workspace directory (`AGYD_WORKSPACE`) and request body size limit (`1 MiB`).
 
 ## T4 — `internal/web` (Swagger UI & OpenAPI Documentation)

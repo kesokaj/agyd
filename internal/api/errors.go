@@ -7,10 +7,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"agy-api/internal/acp"
+	"agyd/internal/acp"
 )
 
-const errorDomain = "agy-api.local"
+const errorDomain = "agyd.local"
 
 type apiError struct {
 	Status int    `json:"-"`

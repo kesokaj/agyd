@@ -4,9 +4,9 @@ import (
 	"log/slog"
 	"net/http"
 
-	"agy-api/internal/acp"
-	"agy-api/internal/api"
-	"agy-api/internal/web"
+	"agyd/internal/acp"
+	"agyd/internal/api"
+	"agyd/internal/web"
 )
 
 func newMux(log *slog.Logger, acpClient acp.Service, workspace string) http.Handler {

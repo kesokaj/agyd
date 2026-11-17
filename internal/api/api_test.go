@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"agy-api/internal/acp"
+	"agyd/internal/acp"
 )
 
 type fakeACPService struct {

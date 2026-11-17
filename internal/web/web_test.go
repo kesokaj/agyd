@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"agy-api/internal/api"
+	"agyd/internal/api"
 )
 
 func TestWebRoutes(t *testing.T) {

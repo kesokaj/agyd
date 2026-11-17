@@ -190,7 +190,7 @@ func (c *Client) spawnAndInit(ctx context.Context) error {
 			FS:       fsCapabilities{ReadTextFile: false, WriteTextFile: false},
 			Terminal: false,
 		},
-		ClientInfo: clientInfo{Name: "agy-api", Version: "0.1.0"},
+		ClientInfo: clientInfo{Name: "agyd", Version: "0.1.0"},
 	}
 	if err := c.call(ctx, "initialize", params, &initRes); err != nil {
 		_ = stdin.Close()

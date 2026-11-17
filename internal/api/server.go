@@ -1,4 +1,4 @@
-// Package api implements the HTTP + Server-Sent Events (SSE) gateway for agy-api.
+// Package api implements the HTTP + Server-Sent Events (SSE) gateway for agyd.
 package api
 
 import (
@@ -12,7 +12,7 @@ import (
 	"sync"
 	"time"
 
-	"agy-api/internal/acp"
+	"agyd/internal/acp"
 )
 
 // Config holds HTTP server configuration.
@@ -53,7 +53,7 @@ func Guard(next http.Handler) http.Handler {
 	})
 }
 
-// NewHandler constructs the HTTP mux for agy-api.
+// NewHandler constructs the HTTP mux for agyd.
 func NewHandler(log *slog.Logger, svc acp.Service, cfg Config) http.Handler {
 	if log == nil {
 		log = slog.Default()

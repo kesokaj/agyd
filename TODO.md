@@ -15,7 +15,6 @@ Phase 2 — `agyd` host binary with Swagger docs, Docker removed (`PLAN-2026-11-
 
 ## Next
 
-- Rebuild with Go 1.27.4 (govulncheck GO-2026-6859, net/http crash in 1.27.3)
 - Add `claude-agent-acp` as a second backend behind `-agy`/`-acp-args` (ACP seam already in place)
 
 ## Backlog
