@@ -7,11 +7,11 @@
 
 ## Now
 
-No active phase. `PLAN-model-selection` is complete (Phase 5 closed 2026-11-18, ADR-005).
+`PLAN-folder-isolation` (approved 2026-11-18, MVP). Phase 0: cleanup done; next the spikes S1 (`agy acp --process-per-session`), S3 (two models at once), S4 (`/clear`), then ADR-006.
+Phases: P1 flags+env and one state file (not keyed by port) - P2 no symlinks - P3 port 8080 then 3000 - P4 per-folder isolation - P5 `/clear` - P6 405 on web routes.
 
 ## Next
 
-- Persist the creation cwd of agyd-created conversations (agy `session/list` reports the git root).
 - CLI output hardening: strip terminal control characters from server and agent text.
 - Permission positive control (operator): with agy `toolPermission: request-review`, rerun the deny_all probe and confirm `permission decision` lines and refusals.
 
@@ -23,11 +23,5 @@ No active phase. `PLAN-model-selection` is complete (Phase 5 closed 2026-11-18, 
 - 2026-11-18 (reviewer r1 #4) `Manager.Resolve` falls back to a fresh conversation only on `ErrSessionNotFound`.
 - 2026-11-18 (reviewer r1 #5) openapi.json: declare 400/401 on `use`, `current` and the PATCH routes.
 - 2026-11-18 (reviewer r1) `-32602` from agy is always labelled `INVALID_SETTING`.
-- 2026-11-18 (surface run) agy adds every `session/new` cwd to later sessions' workspace roots in the same process (BUG open): decide per-cwd agy child, restart-on-new-cwd, or document (ADR).
-- 2026-11-18 (projects research) agy projects are not reachable over ACP (all sessions land in `default-cli-project`); optional approximation: `additionalDirectories` or `project` on create, resolved from `~/.gemini/config/projects/` (PRD/ADR).
 - 2026-11-18 (reviewer surface #1) agent-side settings updates reach the acp registry but not the Manager memos in the state file; after a restart the old mode or model comes back.
-- 2026-11-18 (surface run) set `cmd.Dir` for the agy child: its process cwd also becomes a workspace root.
 - 2026-11-18 (reviewer r1 #8) fill `SessionInfo.Title` for live conversations.
-- 2026-11-18 (security r2 #2) skip malformed lines for ignored keys in `./.env` instead of failing startup; lines over 1 MiB still fail.
-- 2026-11-18 (security r2 #3) warn when a refused `./.env` is skipped; owner check on the walk outside `$HOME` (it goes up to `/`).
-- 2026-11-18 (reviewer r2 #1) cross-process lock (flock) on `config.env` writes.
