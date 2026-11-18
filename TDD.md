@@ -7,11 +7,11 @@ Status: agreed · Last updated: 2026-11-16 · Requirements: [PRD.md](PRD.md) · 
 
 Implements: M1 · Spec: `SPEC-agy-api-acp-gateway`
 
-Wires CLI flags and environment variables, validates loopback binding and host binary availability, starts the `internal/acp` client, composes `internal/web` and `internal/api` routes wrapped with `api.Guard`, and executes graceful shutdown on `SIGINT`/`SIGTERM`.
+Wires CLI flags and environment variables, validates the bind host and port and host binary availability, derives the Host allowlist for a non-loopback bind (`cmd/agyd/listen.go`), starts the `internal/acp` client, composes `internal/web` and `internal/api` routes wrapped with `api.Guard`, and executes graceful shutdown on `SIGINT`/`SIGTERM`.
 
-- **Interfaces:** CLI binary `agyd` accepting flags (`-addr`, `-agy`, `-acp-args`, `-workspace`, `-permission-policy`) and environment overrides (`AGYD_ADDR`, `AGYD_AGY`, `AGYD_ACP_ARGS`, `AGYD_WORKSPACE`, `AGYD_PERMISSION_POLICY`).
-- **Errors:** Exits `1` with a JSON `ERROR` log line if configuration validation fails (non-loopback `-addr`, invalid `-permission-policy`, positional arguments, or missing `agy` executable on `$PATH`).
-- **Configuration:** Workspace defaults to `os.Getwd()`. Address defaults to `127.0.0.1:8080`.
+- **Interfaces:** CLI binary `agyd` accepting flags (`-host`, `-port`, `-agy`, `-acp-args`, `-workspace`, `-permission-policy`, `-h`/`--help`) and environment overrides (`AGYD_HOST`, `AGYD_PORT`, `AGYD_AGY`, `AGYD_ACP_ARGS`, `AGYD_WORKSPACE`, `AGYD_PERMISSION_POLICY`). `--help` prints the flags and exits `0`.
+- **Errors:** Exits `1` with a JSON `ERROR` log line if configuration validation fails (`-host` not an IP or `localhost`, `-port` outside 1-65535, invalid `-permission-policy`, unknown flags such as the removed `-addr`, positional arguments, or missing `agy` executable on `$PATH`). A non-loopback `-host` starts with a `WARNING` log line naming the accepted hosts.
+- **Configuration:** Workspace defaults to `os.Getwd()`. Host defaults to `127.0.0.1`, port to `8080`.
 
 ## T2 — `internal/acp` (ACP v1 JSON-RPC 2.0 Stdio Client)
 
@@ -31,7 +31,7 @@ Serves the HTTP API (`GET /healthz`, `GET /v1/status`, `POST /v1/sessions`, `GET
 
 - **Interfaces:**
   - `NewHandler(log, acpClient, cfg) http.Handler`: mounts API routes and handles both `Accept: text/event-stream` and `Accept: application/json`.
-  - `Guard(next http.Handler) http.Handler`: validates Host headers against loopback targets (`localhost`, `127.0.0.1`, `::1`) returning `403 FORBIDDEN_HOST` on mismatch, and applies `http.CrossOriginProtection` against cross-site requests.
+  - `Guard(next http.Handler, extraHosts ...string) http.Handler`: validates Host headers against loopback targets (`localhost`, `127.0.0.1`, `::1`) plus any `extraHosts` (the machine's IPs and hostname for a non-loopback bind), returning `403 FORBIDDEN_HOST` on mismatch, and applies `http.CrossOriginProtection` against cross-site requests.
   - `Routes []Route`: exported list of registered API routes tested against `openapi.json`.
 - **Errors:** AIP-193 JSON error envelope (`{"error":{"code":...,"status":...,"message":...,"details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":...,"domain":"agyd.local"}]}}`).
 - **Configuration:** Default workspace directory (`AGYD_WORKSPACE`) and request body size limit (`1 MiB`).

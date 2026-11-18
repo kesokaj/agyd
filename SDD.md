@@ -24,7 +24,7 @@ Every package has one responsibility in the HTTP-to-ACP and documentation pipeli
 
 | ID | Component | Responsibility | Satisfies |
 |---|---|---|---|
-| M1 | `cmd/agyd` | Binary entry point, flag/env parsing, loopback address enforcement, mux composition (`internal/web` + `internal/api` wrapped in `api.Guard`), `log/slog` setup, and graceful `SIGINT`/`SIGTERM` shutdown | — |
+| M1 | `cmd/agyd` | Binary entry point, flag/env parsing (`-host`/`-port`, loopback default), Host allowlist for a non-loopback bind, mux composition (`internal/web` + `internal/api` wrapped in `api.Guard`), `log/slog` setup, and graceful `SIGINT`/`SIGTERM` shutdown | — |
 | M2 | `internal/acp` | ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, `session/update` fan-out, and `session/request_permission` policy | — |
 | M3 | `internal/api` | REST and SSE HTTP handlers, route table (`api.Routes`), Host header validation and `http.CrossOriginProtection` (`api.Guard`), and AIP-193 JSON error formatting | — |
 | M4 | `internal/web` | Embedded OpenAPI 3.1 specification (`openapi.json`), vendored Swagger UI assets (`docs.html`, `docs.js`), root redirect (`GET /{$}` -> `/docs`), and CSP/nosniff security headers | — |
@@ -87,13 +87,14 @@ sequenceDiagram
 Architectural choices link to their ADR records (`fyr record get ADR-NNN`).
 
 - Ship `agyd` as a single host binary wrapping installed `agy` CLI over stdio ACP, dropping Docker and container sandboxing in favor of loopback binding, Host header guard, and CSRF protection (`http.CrossOriginProtection`), reusing host `~/.gemini` login without in-app token or credentials — `ADR-002` (supersedes `ADR-001`'s Docker runtime).
+- Default to loopback but allow `-host 0.0.0.0` as an explicit, warned opt-in, with the Host guard extended to the machine's own IPs and hostname — rejected: `0.0.0.0` by default (unauthenticated agent control for anyone on the network) — `ADR-004` (amends `ADR-002`'s loopback-only bind).
 - Use `agy acp` (ACP v1 over stdio) rather than headless `agy -p --input-format stream-json` so one warm process handles multi-turn sessions and the backend binary can be swapped for `claude-agent-acp` — rejected: `agy -p` per-turn subprocess wrapper — `ADR-001`.
 
 ## Cross-cutting
 
 Security, privacy, observability, and cost policies apply across all components.
 
-- **Security:** Binds strictly to loopback (`127.0.0.1`, `localhost`, `::1`); non-loopback addresses fail at startup. `api.Guard` enforces Host header matching (`localhost`, `127.0.0.1`, `::1`, rejecting non-loopback hosts with `403 FORBIDDEN_HOST`) and standard library `http.CrossOriginProtection` against CSRF. No in-app API token is used. Tool execution is auto-approved under `allow_all` default (or rejected under `deny_all`).
+- **Security:** Binds to loopback by default (`-host 127.0.0.1`). `-host 0.0.0.0` (or another IP) is an explicit opt-in, listening on that address family only (`tcp4`/`tcp6`, so `0.0.0.0` never also exposes IPv6), that logs a startup warning (`ADR-004`). `api.Guard` enforces Host header matching: loopback names always, plus the machine's own interface IPs and hostname when bound beyond loopback; anything else gets `403 FORBIDDEN_HOST`. Standard library `http.CrossOriginProtection` guards against CSRF. No in-app API token is used. Tool execution is auto-approved under `allow_all` default (or rejected under `deny_all`).
 - **Privacy:** Request bodies, prompts, and credentials are never logged.
 - **Observability:** Structured JSON logs on `stdout` via `log/slog` (`severity`, `message`, `timestamp`, `url`); `GET /healthz` and `GET /v1/status` report gateway and ACP child readiness.
 - **Cost:** Local host binary only; zero cloud infrastructure cost.

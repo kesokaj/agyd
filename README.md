@@ -116,7 +116,7 @@ Every error has the same shape (Google AIP-193):
 |---|---|---|
 | 400 | `MALFORMED_BODY`, `INVALID_CWD` | Bad JSON, or `cwd` is not a clean absolute path (or is inside `.gemini`) |
 | 401 | `ACP_AUTH_REQUIRED` | `agy` is not signed in. Run `agy` once, or `agy acp --login` |
-| 403 | `FORBIDDEN_HOST` | The request's `Host` header is not loopback |
+| 403 | `FORBIDDEN_HOST` | The request's `Host` header is not an address agyd accepts (loopback, or with `-host` this machine's IPs and hostname) |
 | 404 | `SESSION_NOT_FOUND` | Unknown or deleted session |
 | 409 | `PROMPT_IN_FLIGHT` | That session is already running a turn |
 | 502 | `ACP_RPC_ERROR`, `ACP_PROCESS_EXITED` | `agy` returned an error or exited. It restarts on the next call |
@@ -125,31 +125,40 @@ Every error has the same shape (Google AIP-193):
 
 ## Configuration
 
-Every setting works as a flag or an environment variable. The defaults suit a typical laptop.
+Every setting works as a flag or an environment variable; the flag wins. `agyd --help` lists them. The defaults suit a typical laptop.
 
 | Flag | Env var | Default | What it does |
 |---|---|---|---|
-| `-addr` | `AGYD_ADDR` | `127.0.0.1:8080` | Listen address. Must be loopback and include a port |
+| `-host` | `AGYD_HOST` | `127.0.0.1` | Listen address: an IP or `localhost`. `0.0.0.0` listens on all IPv4 interfaces, `::` on all IPv6 ones (see [Safety](#safety)) |
+| `-port` | `AGYD_PORT` | `8080` | Listen port |
 | `-workspace` | `AGYD_WORKSPACE` | current folder | Default `cwd` for new sessions |
 | `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for agent tool calls |
 | `-agy` | `AGYD_AGY` | `agy` | Path to the `agy` binary |
 | `-acp-args` | `AGYD_ACP_ARGS` | `acp` | Arguments passed to `agy` |
 
 ```bash
-agyd -addr 127.0.0.1:9090 -workspace ~/code/sandbox -permission-policy deny_all
+agyd -port 9090 -workspace ~/code/sandbox -permission-policy deny_all
 ```
+
+### Reaching agyd from another device
+
+```bash
+agyd -host 0.0.0.0 -port 8080
+```
+
+Then open `http://<your-machine-ip>:8080/docs` from the other device. At startup agyd logs a warning listing the addresses it accepts: your machine's IPs and its hostname. macOS may ask whether to allow incoming connections.
 
 ## Safety
 
 `agyd` is built for **one person on their own machine**.
 
 > [!WARNING]
-> With the default `allow_all`, anything that can reach `127.0.0.1:8080` can make the agent write files and run shell commands **as you**. That includes other local programs. Use `-permission-policy deny_all` when you only need read-only answers, and point `-workspace` at a folder you're willing to let the agent change.
+> With the default `allow_all`, anything that can reach agyd can make the agent write files and run shell commands **as you**. On the default `127.0.0.1` that means local programs. With `-host 0.0.0.0` it means **anyone on your network**, because there is no API key. Only listen beyond loopback on a network you trust, and prefer `-permission-policy deny_all` when you do.
 
-- **Loopback only.** `agyd` refuses to start on `0.0.0.0` or any non-loopback address.
-- **Host check.** It rejects requests whose `Host` header isn't loopback (`403`). This blocks DNS-rebinding attacks.
+- **Loopback by default.** Remote access only happens when you pass `-host`.
+- **Host check.** Requests must name `localhost`, `127.0.0.1` or `::1`, or (with `-host`) one of your machine's own IPs or its hostname. Anything else gets `403`. This blocks DNS-rebinding attacks.
 - **CSRF protection.** Browser requests from other websites are blocked.
-- **No token.** There is no API key. The protection is the loopback binding plus the two checks above.
+- **No token.** There is no API key. The protection is the bind address plus the two checks above.
 
 ## Troubleshooting
 
@@ -158,9 +167,9 @@ agyd -addr 127.0.0.1:9090 -workspace ~/code/sandbox -permission-policy deny_all
 | `401 ACP_AUTH_REQUIRED` | Sign in: run `agy` once in a terminal, then retry |
 | `GET /v1/status` returns `500` or `502` | `agy` failed to start. Check it is on `PATH`, or pass `-agy /full/path/to/agy`, and read `agyd`'s log |
 | `400 INVALID_CWD` | Use an absolute path that exists, e.g. `"$(pwd)"`, and that is not under `~/.gemini` |
-| `403 FORBIDDEN_HOST` | Call `127.0.0.1` or `localhost`, not your LAN IP or hostname |
+| `403 FORBIDDEN_HOST` | Use an address agyd accepts: `127.0.0.1`/`localhost`, or with `-host 0.0.0.0` one listed in its startup warning |
 | `409 PROMPT_IN_FLIGHT` | Wait for the turn to finish, or `POST .../cancel` first |
-| Port already in use | `agyd -addr 127.0.0.1:9090` |
+| Port already in use | `agyd -port 9090` |
 
 ## Development
 

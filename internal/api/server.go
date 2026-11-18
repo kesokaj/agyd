@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"net/netip"
 	"runtime/debug"
 	"strings"
 	"sync"
@@ -27,20 +28,26 @@ type server struct {
 }
 
 // Guard applies the Host guard and CrossOriginProtection to the mux.
-func Guard(next http.Handler) http.Handler {
+// Loopback names (localhost, 127.0.0.1, ::1) are always allowed; extraHosts
+// adds the names a non-loopback bind is reached by (interface IPs, hostname).
+// Any other Host header is refused, which blocks DNS rebinding.
+func Guard(next http.Handler, extraHosts ...string) http.Handler {
 	csrf := http.NewCrossOriginProtection()
 	csrfHandler := csrf.Handler(next)
+
+	allowed := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
+	for _, h := range extraHosts {
+		if h = normalizeHost(h); h != "" {
+			allowed[h] = true
+		}
+	}
 
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		host, _, err := net.SplitHostPort(r.Host)
 		if err != nil {
 			host = r.Host
 		}
-		host = strings.TrimPrefix(host, "[")
-		host = strings.TrimSuffix(host, "]")
-		host = strings.ToLower(host)
-
-		if host != "localhost" && host != "127.0.0.1" && host != "::1" {
+		if !allowed[normalizeHost(host)] {
 			writeError(w, &apiError{
 				Status: http.StatusForbidden,
 				Code:   "PERMISSION_DENIED",
@@ -51,6 +58,18 @@ func Guard(next http.Handler) http.Handler {
 		}
 		csrfHandler.ServeHTTP(w, r)
 	})
+}
+
+// normalizeHost strips IPv6 brackets and returns IPs in canonical form
+// (IPv4-mapped unmapped, IPv6 compressed) and names lowercased, so the
+// allowlist and Host header compare equal however each was written.
+func normalizeHost(h string) string {
+	h = strings.TrimPrefix(h, "[")
+	h = strings.TrimSuffix(h, "]")
+	if a, err := netip.ParseAddr(h); err == nil {
+		return a.Unmap().String()
+	}
+	return strings.ToLower(h)
 }
 
 // NewHandler constructs the HTTP mux for agyd.

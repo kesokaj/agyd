@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -22,17 +23,30 @@ import (
 )
 
 type appConfig struct {
-	Addr             string
+	Host             string
+	Port             int
 	ACPBin           string
 	ACPArgs          []string
 	Workspace        string
 	PermissionPolicy acp.PermissionPolicy
 }
 
+// Addr is the host:port the server listens on.
+func (c appConfig) Addr() string { return net.JoinHostPort(c.Host, strconv.Itoa(c.Port)) }
+
+// usageError carries the flag help text; main prints it and exits 0.
+type usageError struct{ text string }
+
+func (e *usageError) Error() string { return "help requested" }
+
 func loadConfig(args []string, getenv func(string) string, getwd func() (string, error), lookPath func(string) (string, error)) (appConfig, error) {
-	defaultAddr := getenv("AGYD_ADDR")
-	if defaultAddr == "" {
-		defaultAddr = "127.0.0.1:8080"
+	defaultHost := getenv("AGYD_HOST")
+	if defaultHost == "" {
+		defaultHost = "127.0.0.1"
+	}
+	defaultPort := getenv("AGYD_PORT")
+	if defaultPort == "" {
+		defaultPort = "8080"
 	}
 	defaultBin := getenv("AGYD_AGY")
 	if defaultBin == "" {
@@ -57,26 +71,34 @@ func loadConfig(args []string, getenv func(string) string, getwd func() (string,
 
 	fs := flag.NewFlagSet("agyd", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	addr := fs.String("addr", defaultAddr, "HTTP listen address")
-	acpBin := fs.String("agy", defaultBin, "ACP agent executable")
-	acpArgs := fs.String("acp-args", defaultArgs, "space-separated arguments for ACP agent")
-	workspace := fs.String("workspace", defaultWS, "default session working directory")
-	policyStr := fs.String("permission-policy", defaultPolicy, "permission policy (allow_all or deny_all)")
+	hostStr := fs.String("host", defaultHost, "listen address: an IP or localhost; 0.0.0.0 listens on all interfaces (env AGYD_HOST)")
+	portStr := fs.String("port", defaultPort, "listen port, 1-65535 (env AGYD_PORT)")
+	acpBin := fs.String("agy", defaultBin, "agy executable (env AGYD_AGY)")
+	acpArgs := fs.String("acp-args", defaultArgs, "space-separated arguments for agy (env AGYD_ACP_ARGS)")
+	workspace := fs.String("workspace", defaultWS, "default session working directory (env AGYD_WORKSPACE)")
+	policyStr := fs.String("permission-policy", defaultPolicy, "allow_all approves every agent tool call; deny_all refuses them (env AGYD_PERMISSION_POLICY)")
 
 	if err := fs.Parse(args); err != nil {
+		if errors.Is(err, flag.ErrHelp) {
+			var b strings.Builder
+			b.WriteString("agyd: HTTP + SSE API and Swagger docs in front of agy.\n\nUsage: agyd [flags]\n\nFlags:\n")
+			fs.SetOutput(&b)
+			fs.PrintDefaults()
+			return appConfig{}, &usageError{text: b.String()}
+		}
 		return appConfig{}, fmt.Errorf("parsing flags: %w", err)
 	}
 	if fs.NArg() > 0 {
 		return appConfig{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
 
-	host, _, err := net.SplitHostPort(strings.TrimSpace(*addr))
-	if err != nil {
-		return appConfig{}, fmt.Errorf("invalid addr %q: want host:port, e.g. 127.0.0.1:8080", *addr)
+	host := strings.ToLower(strings.TrimSpace(*hostStr))
+	if host != "localhost" && net.ParseIP(host) == nil {
+		return appConfig{}, fmt.Errorf("invalid host %q: want an IP address or localhost, e.g. 127.0.0.1 or 0.0.0.0", *hostStr)
 	}
-	host = strings.ToLower(host)
-	if host != "127.0.0.1" && host != "localhost" && host != "::1" {
-		return appConfig{}, fmt.Errorf("invalid addr %q: must be loopback (127.0.0.1, localhost, or ::1)", host)
+	port, err := strconv.Atoi(strings.TrimSpace(*portStr))
+	if err != nil || port < 1 || port > 65535 {
+		return appConfig{}, fmt.Errorf("invalid port %q: want 1-65535", *portStr)
 	}
 
 	if _, err := lookPath(*acpBin); err != nil {
@@ -93,7 +115,8 @@ func loadConfig(args []string, getenv func(string) string, getwd func() (string,
 	}
 
 	return appConfig{
-		Addr:             strings.TrimSpace(*addr),
+		Host:             host,
+		Port:             port,
 		ACPBin:           strings.TrimSpace(*acpBin),
 		ACPArgs:          strings.Fields(*acpArgs),
 		Workspace:        cleanWS,
@@ -145,19 +168,29 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 		log.Warn("initial acp startup failed; will retry lazily on next request", "err", err)
 	}
 
+	extraHosts := exposedHosts(cfg.Host, net.InterfaceAddrs, os.Hostname)
+	if !isLoopbackHost(cfg.Host) {
+		log.Warn("listening beyond loopback: anyone who can reach this address can drive agy as you; there is no API token",
+			"host", cfg.Host, "permissionPolicy", cfg.PermissionPolicy, "allowedHosts", extraHosts)
+	}
+
 	srv := &http.Server{
-		Addr:              cfg.Addr,
-		Handler:           newMux(log, acpClient, cfg.Workspace),
+		Addr:              cfg.Addr(),
+		Handler:           newMux(log, acpClient, cfg.Workspace, extraHosts...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,
 		IdleTimeout:       120 * time.Second,
 	}
 
+	ln, err := net.Listen(listenNetwork(cfg.Host), cfg.Addr())
+	if err != nil {
+		return fmt.Errorf("listening on %s: %w", cfg.Addr(), err)
+	}
 	errc := make(chan error, 1)
-	go func() { errc <- srv.ListenAndServe() }()
+	go func() { errc <- srv.Serve(ln) }()
 
-	log.Info("listening", "addr", cfg.Addr, "url", "http://"+cfg.Addr, "acpBin", cfg.ACPBin, "workspace", cfg.Workspace)
+	log.Info("listening", "addr", cfg.Addr(), "url", localURL(cfg), "acpBin", cfg.ACPBin, "workspace", cfg.Workspace)
 
 	select {
 	case err := <-errc:
@@ -179,6 +212,10 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 func main() {
 	log := newLogger(os.Stdout)
 	cfg, err := loadConfig(os.Args[1:], os.Getenv, os.Getwd, exec.LookPath)
+	if ue, ok := errors.AsType[*usageError](err); ok {
+		fmt.Print(ue.text)
+		return
+	}
 	if err != nil {
 		log.Error("configuration error", "err", err)
 		os.Exit(1)
