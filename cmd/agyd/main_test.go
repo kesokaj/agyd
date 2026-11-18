@@ -120,11 +120,48 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s: err = %v, want *usageError", arg, err)
 			}
-			for _, f := range []string{"-host", "-port", "-workspace", "-permission-policy", "-agy", "-acp-args", "AGYD_HOST"} {
+			for _, f := range []string{"-host", "-port", "-workspace", "-permission-policy", "-agy", "-acp-args", "AGYD_HOST",
+				"-model", "-thinking", "-mode", "-no-prompt", "AGYD_MODEL", "AGYD_THINKING", "AGYD_MODE", "AGYD_NO_PROMPT", "config.env"} {
 				if !strings.Contains(ue.text, f) {
 					t.Errorf("%s: usage lacks %q:\n%s", arg, f, ue.text)
 				}
 			}
+		}
+	})
+
+	t.Run("settings come from env, flags win, values are validated", func(t *testing.T) {
+		env := map[string]string{"AGYD_MODEL": "gemini-4-carbon", "AGYD_THINKING": "low", "AGYD_MODE": "plan", "AGYD_NO_PROMPT": "true"}
+		getenv := func(k string) string { return env[k] }
+		cfg, err := loadConfig(nil, getenv, mockGetwd, mockLookPath)
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.Model != "gemini-4-carbon" || cfg.Thinking != "low" || cfg.Mode != "plan" || !cfg.NoPrompt {
+			t.Errorf("from env: %+v", cfg)
+		}
+		cfg, err = loadConfig([]string{"-model", "claude-sonnet-5-5", "-thinking=high", "-no-prompt=false"}, getenv, mockGetwd, mockLookPath)
+		if err != nil {
+			t.Fatalf("loadConfig: %v", err)
+		}
+		if cfg.Model != "claude-sonnet-5-5" || cfg.Thinking != "high" || cfg.Mode != "plan" || cfg.NoPrompt {
+			t.Errorf("flags over env: %+v", cfg)
+		}
+		for _, args := range [][]string{
+			{"-model", "a b"}, {"-thinking", "x=y"}, {"-mode", "#c"}, {"-model", "a\nAGYD_AGY=/bin/sh"},
+		} {
+			if _, err := loadConfig(args, noEnv, mockGetwd, mockLookPath); err == nil {
+				t.Errorf("loadConfig(%q) err = nil, want an invalid-value error", args)
+			}
+		}
+		if _, err := loadConfig(nil, func(k string) string { return map[string]string{"AGYD_NO_PROMPT": "maybe"}[k] }, mockGetwd, mockLookPath); err == nil {
+			t.Error("AGYD_NO_PROMPT=maybe: err = nil, want an error")
+		}
+	})
+
+	t.Run("unset settings stay empty", func(t *testing.T) {
+		cfg, err := loadConfig(nil, noEnv, mockGetwd, mockLookPath)
+		if err != nil || cfg.Model != "" || cfg.Thinking != "" || cfg.Mode != "" || cfg.NoPrompt {
+			t.Fatalf("cfg = %+v, err = %v; want empty settings", cfg, err)
 		}
 	})
 }

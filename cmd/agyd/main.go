@@ -4,7 +4,6 @@ package main
 import (
 	"context"
 	"errors"
-	"flag"
 	"fmt"
 	"io"
 	"log/slog"
@@ -13,116 +12,12 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
-	"strconv"
-	"strings"
 	"syscall"
 	"time"
 
 	"agyd/internal/acp"
+	"agyd/internal/config"
 )
-
-type appConfig struct {
-	Host             string
-	Port             int
-	ACPBin           string
-	ACPArgs          []string
-	Workspace        string
-	PermissionPolicy acp.PermissionPolicy
-}
-
-// Addr is the host:port the server listens on.
-func (c appConfig) Addr() string { return net.JoinHostPort(c.Host, strconv.Itoa(c.Port)) }
-
-// usageError carries the flag help text; main prints it and exits 0.
-type usageError struct{ text string }
-
-func (e *usageError) Error() string { return "help requested" }
-
-func loadConfig(args []string, getenv func(string) string, getwd func() (string, error), lookPath func(string) (string, error)) (appConfig, error) {
-	defaultHost := getenv("AGYD_HOST")
-	if defaultHost == "" {
-		defaultHost = "127.0.0.1"
-	}
-	defaultPort := getenv("AGYD_PORT")
-	if defaultPort == "" {
-		defaultPort = "8080"
-	}
-	defaultBin := getenv("AGYD_AGY")
-	if defaultBin == "" {
-		defaultBin = "agy"
-	}
-	defaultArgs := getenv("AGYD_ACP_ARGS")
-	if defaultArgs == "" {
-		defaultArgs = "acp"
-	}
-	defaultWS := getenv("AGYD_WORKSPACE")
-	if defaultWS == "" {
-		wd, err := getwd()
-		if err != nil {
-			return appConfig{}, fmt.Errorf("getting current directory: %w", err)
-		}
-		defaultWS = wd
-	}
-	defaultPolicy := getenv("AGYD_PERMISSION_POLICY")
-	if defaultPolicy == "" {
-		defaultPolicy = "allow_all"
-	}
-
-	fs := flag.NewFlagSet("agyd", flag.ContinueOnError)
-	fs.SetOutput(io.Discard)
-	hostStr := fs.String("host", defaultHost, "listen address: an IP or localhost; 0.0.0.0 listens on all interfaces (env AGYD_HOST)")
-	portStr := fs.String("port", defaultPort, "listen port, 1-65535 (env AGYD_PORT)")
-	acpBin := fs.String("agy", defaultBin, "agy executable (env AGYD_AGY)")
-	acpArgs := fs.String("acp-args", defaultArgs, "space-separated arguments for agy (env AGYD_ACP_ARGS)")
-	workspace := fs.String("workspace", defaultWS, "default session working directory (env AGYD_WORKSPACE)")
-	policyStr := fs.String("permission-policy", defaultPolicy, "allow_all approves every agent tool call; deny_all refuses them (env AGYD_PERMISSION_POLICY)")
-
-	if err := fs.Parse(args); err != nil {
-		if errors.Is(err, flag.ErrHelp) {
-			var b strings.Builder
-			b.WriteString("agyd: HTTP + SSE API and Swagger docs in front of agy.\n\nUsage: agyd [flags]\n\nFlags:\n")
-			fs.SetOutput(&b)
-			fs.PrintDefaults()
-			return appConfig{}, &usageError{text: b.String()}
-		}
-		return appConfig{}, fmt.Errorf("parsing flags: %w", err)
-	}
-	if fs.NArg() > 0 {
-		return appConfig{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
-	}
-
-	host := strings.ToLower(strings.TrimSpace(*hostStr))
-	if host != "localhost" && net.ParseIP(host) == nil {
-		return appConfig{}, fmt.Errorf("invalid host %q: want an IP address or localhost, e.g. 127.0.0.1 or 0.0.0.0", *hostStr)
-	}
-	port, err := strconv.Atoi(strings.TrimSpace(*portStr))
-	if err != nil || port < 1 || port > 65535 {
-		return appConfig{}, fmt.Errorf("invalid port %q: want 1-65535", *portStr)
-	}
-
-	if _, err := lookPath(*acpBin); err != nil {
-		return appConfig{}, fmt.Errorf("agy not found on PATH; install agy-cli or pass -agy /path/to/agy")
-	}
-
-	policy, err := acp.ParsePermissionPolicy(*policyStr)
-	if err != nil {
-		return appConfig{}, err
-	}
-	cleanWS := filepath.Clean(strings.TrimSpace(*workspace))
-	if !filepath.IsAbs(cleanWS) {
-		return appConfig{}, fmt.Errorf("workspace %q must be an absolute path", *workspace)
-	}
-
-	return appConfig{
-		Host:             host,
-		Port:             port,
-		ACPBin:           strings.TrimSpace(*acpBin),
-		ACPArgs:          strings.Fields(*acpArgs),
-		Workspace:        cleanWS,
-		PermissionPolicy: policy,
-	}, nil
-}
 
 func newLogger(w io.Writer) *slog.Logger {
 	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
@@ -211,7 +106,7 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 
 func main() {
 	log := newLogger(os.Stdout)
-	cfg, err := loadConfig(os.Args[1:], os.Getenv, os.Getwd, exec.LookPath)
+	cfg, err := loadServeConfig(log, os.Args[1:])
 	if ue, ok := errors.AsType[*usageError](err); ok {
 		fmt.Print(ue.text)
 		return
@@ -226,4 +121,27 @@ func main() {
 		log.Error("server exited with error", "err", err)
 		os.Exit(1)
 	}
+}
+
+// loadServeConfig layers ./.env, the shell env and config.env (never touching
+// the process environment), then applies the flags.
+func loadServeConfig(log *slog.Logger, args []string) (appConfig, error) {
+	cwd, err := os.Getwd()
+	if err != nil {
+		return appConfig{}, fmt.Errorf("getting current directory: %w", err)
+	}
+	layers, err := config.Load(cwd, os.Getenv, os.ReadFile)
+	if err != nil {
+		return appConfig{}, err
+	}
+	if len(layers.Ignored) > 0 {
+		log.Warn("ignoring keys a project .env may not set; put them in config.env or the shell env",
+			"file", layers.DotEnvFile, "keys", layers.Ignored)
+	}
+	cfg, err := loadConfig(args, layers.Getenv, func() (string, error) { return cwd, nil }, exec.LookPath)
+	if err == nil {
+		log.Info("settings", "model", cfg.Model, "thinking", cfg.Thinking, "mode", cfg.Mode,
+			"configFile", layers.ConfigFile, "dotEnvFile", layers.DotEnvFile)
+	}
+	return cfg, err
 }
