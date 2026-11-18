@@ -5,6 +5,7 @@
 *.key
 /agy-api
 /agyd
+/bin/
 dist/
 .agents/memory
 .agents/scratch/*

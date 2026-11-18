@@ -15,8 +15,9 @@ You need **Go 1.27+** and a working **`agy`** on your `PATH`, already signed in.
 
 ```bash
 gh repo clone kesokaj/agyd && cd agyd
-go install ./cmd/agyd        # installs to $(go env GOPATH)/bin
-cd ~/code/my-project         # the folder the agent should work in
+go build -o bin/ ./cmd/agyd    # writes bin/agyd
+export PATH="$PWD/bin:$PATH"   # or copy bin/agyd to a folder on your PATH
+cd ~/code/my-project           # the folder the agent should work in
 agyd
 ```
 
@@ -174,8 +175,10 @@ Then open `http://<your-machine-ip>:8080/docs` from the other device. At startup
 ## Development
 
 ```bash
-go build ./cmd/agyd                 # build
+go build -o bin/ ./cmd/agyd         # build to bin/agyd (gitignored)
 go vet ./... && go test -race ./... # test (no real agy needed)
 ```
+
+Layout: `cmd/agyd/` is the program's source (entry point), `internal/` the packages it uses, `bin/` the build output.
 
 Design docs: [SDD.md](SDD.md) (architecture) and [TDD.md](TDD.md) (components and tests). Decisions, specs and the testing guide live in the project trail: `fyr record list --kind adr`, `fyr record get GUIDE-testing`.

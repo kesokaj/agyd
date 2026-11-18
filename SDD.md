@@ -101,7 +101,7 @@ Security, privacy, observability, and cost policies apply across all components.
 
 ## Deployment
 
-Runs locally on the host machine (`go install ./cmd/agyd` or `go run ./cmd/agyd`); see `DEPLOY-local` (`fyr record get DEPLOY-local`).
+Runs locally on the host machine (`go build -o bin/ ./cmd/agyd`, then run `bin/agyd`; or `go run ./cmd/agyd`); see `DEPLOY-local` (`fyr record get DEPLOY-local`).
 
 ## Risks
 

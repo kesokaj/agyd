@@ -8,7 +8,7 @@
 
 ```bash
 # Build
-go build ./cmd/agyd
+go build -o bin/ ./cmd/agyd   # writes bin/agyd
 
 # Run
 go run ./cmd/agyd
