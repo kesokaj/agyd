@@ -2,8 +2,8 @@
   "openapi": "3.1.0",
   "info": {
     "title": "agyd",
-    "version": "0.1.0",
-    "description": "Local HTTP/SSE API wrapping agy-cli"
+    "version": "0.2.0",
+    "description": "Local HTTP/SSE API wrapping agy-cli. Prompts go to the current conversation unless a conversation id is given. Every /healthz and /v1 response (errors included, Host-guard and CSRF 403s excepted) carries Agyd-Conversation, Agyd-Model, Agyd-Thinking-Level and Agyd-Mode."
   },
   "servers": [
     {
@@ -14,9 +14,26 @@
     "/healthz": {
       "get": {
         "summary": "Health check",
+        "tags": [
+          "service"
+        ],
         "responses": {
           "204": {
-            "description": "OK"
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
@@ -27,9 +44,26 @@
     "/v1/status": {
       "get": {
         "summary": "Get status",
+        "tags": [
+          "service"
+        ],
         "responses": {
           "200": {
             "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -53,16 +87,268 @@
         }
       }
     },
-    "/v1/sessions": {
+    "/v1/current": {
       "get": {
-        "summary": "List sessions",
+        "summary": "Get the current conversation",
+        "tags": [
+          "current"
+        ],
+        "description": "Resumes the current conversation if agy no longer has it live. 404 NO_CURRENT_CONVERSATION when none is set.",
         "responses": {
           "200": {
             "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ListSessionsResponse"
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      },
+      "patch": {
+        "summary": "Change the current conversation's settings",
+        "tags": [
+          "current"
+        ],
+        "description": "409 PROMPT_IN_FLIGHT while a turn runs. A value agy does not offer is 400 INVALID_SETTING. A value equal to the current one is not sent to agy.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/prompt": {
+      "post": {
+        "summary": "Prompt the current conversation",
+        "tags": [
+          "current"
+        ],
+        "description": "Creates a conversation with the defaults when none is current. The target is resolved once, when the request starts.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PromptRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PromptResult"
+                }
+              },
+              "text/event-stream": {
+                "schema": {
+                  "type": "string",
+                  "description": "Sent when the request has `Accept: text/event-stream`. Events: session_update (raw ACP session update), prompt_done (PromptResult without updates), prompt_error (Error envelope)."
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/cancel": {
+      "post": {
+        "summary": "Cancel the current conversation's turn",
+        "tags": [
+          "current"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CancelResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/conversations": {
+      "get": {
+        "summary": "List conversations",
+        "tags": [
+          "conversations"
+        ],
+        "description": "Live conversations merged with agy's history (every agy conversation on the host), newest first. Settings are shown for live conversations only.",
+        "parameters": [
+          {
+            "name": "cwd",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Keep only conversations with this working directory"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ListConversationsResponse"
                 }
               }
             }
@@ -76,13 +362,17 @@
         }
       },
       "post": {
-        "summary": "Create session",
+        "summary": "Create a conversation",
+        "tags": [
+          "conversations"
+        ],
+        "description": "Starts from the defaults, then applies the given settings (a value agy rejects fails the request). Becomes current unless use is false.",
         "requestBody": {
-          "required": true,
+          "required": false,
           "content": {
             "application/json": {
               "schema": {
-                "$ref": "#/components/schemas/CreateSessionRequest"
+                "$ref": "#/components/schemas/CreateConversationRequest"
               }
             }
           }
@@ -90,23 +380,30 @@
         "responses": {
           "201": {
             "description": "Created",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionInfo"
+                  "$ref": "#/components/schemas/Conversation"
                 }
               }
             }
           },
           "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -123,12 +420,16 @@
         }
       }
     },
-    "/v1/sessions/{sessionId}": {
+    "/v1/conversations/{conversationId}": {
       "get": {
-        "summary": "Get session",
+        "summary": "Get a conversation",
+        "tags": [
+          "conversations"
+        ],
+        "description": "A live conversation, else its entry in agy's history.",
         "parameters": [
           {
-            "name": "sessionId",
+            "name": "conversationId",
             "in": "path",
             "required": true,
             "schema": {
@@ -139,10 +440,24 @@
         "responses": {
           "200": {
             "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/SessionInfo"
+                  "$ref": "#/components/schemas/Conversation"
                 }
               }
             }
@@ -151,25 +466,93 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/NotFound"
           },
           "500": {
             "$ref": "#/components/responses/Internal"
           }
         }
       },
-      "delete": {
-        "summary": "Delete session",
+      "patch": {
+        "summary": "Change a live conversation's settings",
+        "tags": [
+          "conversations"
+        ],
+        "description": "409 PROMPT_IN_FLIGHT while a turn runs.",
         "parameters": [
           {
-            "name": "sessionId",
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      },
+      "delete": {
+        "summary": "Close a live conversation",
+        "tags": [
+          "conversations"
+        ],
+        "description": "Closing the current conversation clears the pointer; the next POST /v1/prompt creates one. 409 PROMPT_IN_FLIGHT while a turn runs.",
+        "parameters": [
+          {
+            "name": "conversationId",
             "in": "path",
             "required": true,
             "schema": {
@@ -179,23 +562,30 @@
         ],
         "responses": {
           "204": {
-            "description": "Deleted"
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
+            "description": "Closed",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            }
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
           "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/NotFound"
+          },
+          "409": {
+            "$ref": "#/components/responses/Conflict"
           },
           "500": {
             "$ref": "#/components/responses/Internal"
@@ -206,12 +596,15 @@
         }
       }
     },
-    "/v1/sessions/{sessionId}/prompt": {
+    "/v1/conversations/{conversationId}/prompt": {
       "post": {
-        "summary": "Send prompt",
+        "summary": "Prompt a live conversation",
+        "tags": [
+          "conversations"
+        ],
         "parameters": [
           {
-            "name": "sessionId",
+            "name": "conversationId",
             "in": "path",
             "required": true,
             "schema": {
@@ -232,6 +625,20 @@
         "responses": {
           "200": {
             "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
@@ -241,20 +648,13 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "SSE stream with events: session_update (raw ACP session updates), prompt_done (PromptResult), prompt_error (Error envelope)"
+                  "description": "Sent when the request has `Accept: text/event-stream`. Events: session_update (raw ACP session update), prompt_done (PromptResult without updates), prompt_error (Error envelope)."
                 }
               }
             }
           },
           "400": {
-            "description": "Bad Request",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/BadRequest"
           },
           "401": {
             "$ref": "#/components/responses/Unauthorized"
@@ -263,24 +663,10 @@
             "$ref": "#/components/responses/Forbidden"
           },
           "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/NotFound"
           },
           "409": {
-            "description": "Conflict",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/Conflict"
           },
           "500": {
             "$ref": "#/components/responses/Internal"
@@ -291,12 +677,15 @@
         }
       }
     },
-    "/v1/sessions/{sessionId}/cancel": {
+    "/v1/conversations/{conversationId}/cancel": {
       "post": {
-        "summary": "Cancel prompt",
+        "summary": "Cancel a conversation's turn",
+        "tags": [
+          "conversations"
+        ],
         "parameters": [
           {
-            "name": "sessionId",
+            "name": "conversationId",
             "in": "path",
             "required": true,
             "schema": {
@@ -307,43 +696,226 @@
         "responses": {
           "200": {
             "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "object",
-                  "properties": {
-                    "sessionId": {
-                      "type": "string"
-                    },
-                    "state": {
-                      "type": "string"
-                    }
-                  }
+                  "$ref": "#/components/schemas/CancelResponse"
                 }
               }
             }
-          },
-          "401": {
-            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
           "404": {
-            "description": "Not Found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/Error"
-                }
-              }
-            }
+            "$ref": "#/components/responses/NotFound"
           },
           "500": {
             "$ref": "#/components/responses/Internal"
           },
           "502": {
             "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversationId}/use": {
+      "post": {
+        "summary": "Make a conversation current",
+        "tags": [
+          "conversations"
+        ],
+        "description": "Resumes the conversation from agy's history when it is not live, then re-applies its remembered settings (else the defaults).",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "summary": "List the models, thinking levels and modes agy offers",
+        "tags": [
+          "settings"
+        ],
+        "description": "From the configOptions agy last reported. 503 MODELS_UNKNOWN before the first conversation exists.",
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModelsResponse"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "503": {
+            "$ref": "#/components/responses/Unavailable"
+          }
+        }
+      }
+    },
+    "/v1/defaults": {
+      "get": {
+        "summary": "Get the running defaults",
+        "tags": [
+          "settings"
+        ],
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          }
+        }
+      },
+      "put": {
+        "summary": "Set the defaults and save them to config.env",
+        "tags": [
+          "settings"
+        ],
+        "description": "Merges the given fields into the running defaults (omitted fields keep their value) and writes AGYD_MODEL, AGYD_THINKING and AGYD_MODE to config.env in the agyd config directory. Each value must match ^[A-Za-z0-9._-]{1,64}$ and, once agy has reported its options, be one of them. Applies to conversations created or resumed afterwards.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Settings"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "OK",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settings"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
           }
         }
       }
@@ -385,62 +957,122 @@
           }
         }
       },
-      "SessionInfo": {
+      "Settings": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "model": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "description": "Model family (agy configOptions id `model`)",
+            "example": "gemini-4-carbon"
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "description": "agy configOptions id `thought_level`",
+            "example": "medium"
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$",
+            "description": "agy configOptions id `mode`",
+            "example": "default"
+          }
+        }
+      },
+      "Conversation": {
         "type": "object",
         "required": [
-          "sessionId",
+          "conversationId",
           "cwd",
-          "backend",
-          "createTime"
+          "live",
+          "current"
         ],
         "properties": {
-          "sessionId": {
+          "conversationId": {
             "type": "string"
           },
           "cwd": {
             "type": "string",
-            "description": "Absolute working directory of the session"
+            "description": "Absolute working directory"
           },
-          "backend": {
+          "title": {
+            "type": "string"
+          },
+          "live": {
+            "type": "boolean",
+            "description": "Open in this agyd's agy process"
+          },
+          "current": {
+            "type": "boolean"
+          },
+          "model": {
             "type": "string",
-            "example": "agy"
+            "description": "Live conversations only"
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "description": "Live conversations only"
+          },
+          "mode": {
+            "type": "string",
+            "description": "Live conversations only"
           },
           "createTime": {
             "type": "string",
             "format": "date-time"
           },
-          "modes": {
-            "description": "Raw ACP session modes, passed through from the agent"
-          },
-          "models": {
-            "description": "Raw ACP model state, passed through from the agent"
-          },
-          "configOptions": {
-            "description": "Raw ACP config options, passed through from the agent"
+          "updateTime": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
-      "ListSessionsResponse": {
+      "ListConversationsResponse": {
         "type": "object",
         "properties": {
           "items": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/SessionInfo"
+              "$ref": "#/components/schemas/Conversation"
             }
           }
         }
       },
-      "CreateSessionRequest": {
+      "CreateConversationRequest": {
         "type": "object",
+        "additionalProperties": false,
         "properties": {
           "cwd": {
-            "type": "string"
+            "type": "string",
+            "description": "Absolute path; defaults to the server workspace"
+          },
+          "model": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          },
+          "thinkingLevel": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          },
+          "mode": {
+            "type": "string",
+            "pattern": "^[A-Za-z0-9._-]{1,64}$"
+          },
+          "use": {
+            "type": "boolean",
+            "default": true,
+            "description": "Make the new conversation current"
           }
         }
       },
       "PromptRequest": {
         "type": "object",
+        "required": [
+          "prompt"
+        ],
+        "additionalProperties": false,
         "properties": {
           "prompt": {
             "type": "string"
@@ -450,7 +1082,16 @@
       "PromptResult": {
         "type": "object",
         "properties": {
-          "sessionId": {
+          "conversationId": {
+            "type": "string"
+          },
+          "model": {
+            "type": "string"
+          },
+          "thinkingLevel": {
+            "type": "string"
+          },
+          "mode": {
             "type": "string"
           },
           "stopReason": {
@@ -469,6 +1110,54 @@
           "usage": {
             "type": "object",
             "additionalProperties": true
+          }
+        }
+      },
+      "CancelResponse": {
+        "type": "object",
+        "properties": {
+          "conversationId": {
+            "type": "string"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "CANCEL_REQUESTED"
+            ]
+          }
+        }
+      },
+      "ConfigValue": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "ModelsResponse": {
+        "type": "object",
+        "properties": {
+          "models": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigValue"
+            }
+          },
+          "thinkingLevels": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigValue"
+            }
+          },
+          "modes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigValue"
+            }
           }
         }
       },
@@ -518,6 +1207,20 @@
               "$ref": "#/components/schemas/Error"
             }
           }
+        },
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
+          }
         }
       },
       "BadGateway": {
@@ -527,6 +1230,20 @@
             "schema": {
               "$ref": "#/components/schemas/Error"
             }
+          }
+        },
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
           }
         }
       },
@@ -538,8 +1255,158 @@
               "$ref": "#/components/schemas/Error"
             }
           }
+        },
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Malformed body (MALFORMED_BODY), missing field (FIELD_REQUIRED), bad cwd (INVALID_CWD) or a setting agyd or agy rejects (INVALID_SETTING)",
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "NotFound": {
+        "description": "CONVERSATION_NOT_FOUND or NO_CURRENT_CONVERSATION",
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Conflict": {
+        "description": "A turn is in flight for the conversation (PROMPT_IN_FLIGHT)",
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Unavailable": {
+        "description": "agy has not reported its options yet (MODELS_UNKNOWN)",
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    },
+    "headers": {
+      "AgydConversation": {
+        "description": "The conversation the request used, else the current one. Absent when unknown.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "AgydModel": {
+        "description": "That conversation's model, as agy confirmed it. Absent when unknown.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "AgydThinkingLevel": {
+        "description": "That conversation's thinking level, as agy confirmed it. Absent when unknown.",
+        "schema": {
+          "type": "string"
+        }
+      },
+      "AgydMode": {
+        "description": "That conversation's mode, as agy confirmed it. Absent when unknown.",
+        "schema": {
+          "type": "string"
         }
       }
     }
-  }
+  },
+  "tags": [
+    {
+      "name": "current"
+    },
+    {
+      "name": "conversations"
+    },
+    {
+      "name": "settings"
+    },
+    {
+      "name": "service"
+    }
+  ]
 }

@@ -21,12 +21,21 @@ func (s *server) routes() []route {
 	return []route{
 		{Route{http.MethodGet, "/healthz"}, s.handleHealthz},
 		{Route{http.MethodGet, "/v1/status"}, s.handleStatus},
-		{Route{http.MethodPost, "/v1/sessions"}, s.handleCreateSession},
-		{Route{http.MethodGet, "/v1/sessions"}, s.handleListSessions},
-		{Route{http.MethodGet, "/v1/sessions/{sessionId}"}, s.handleGetSession},
-		{Route{http.MethodPost, "/v1/sessions/{sessionId}/prompt"}, s.handlePrompt},
-		{Route{http.MethodPost, "/v1/sessions/{sessionId}/cancel"}, s.handleCancel},
-		{Route{http.MethodDelete, "/v1/sessions/{sessionId}"}, s.handleDeleteSession},
+		{Route{http.MethodGet, "/v1/current"}, s.handleGetCurrent},
+		{Route{http.MethodPatch, "/v1/current"}, s.handleUpdateCurrent},
+		{Route{http.MethodPost, "/v1/prompt"}, s.handlePromptCurrent},
+		{Route{http.MethodPost, "/v1/cancel"}, s.handleCancelCurrent},
+		{Route{http.MethodPost, "/v1/conversations"}, s.handleCreateConversation},
+		{Route{http.MethodGet, "/v1/conversations"}, s.handleListConversations},
+		{Route{http.MethodGet, "/v1/conversations/{conversationId}"}, s.handleGetConversation},
+		{Route{http.MethodPatch, "/v1/conversations/{conversationId}"}, s.handleUpdateConversation},
+		{Route{http.MethodDelete, "/v1/conversations/{conversationId}"}, s.handleDeleteConversation},
+		{Route{http.MethodPost, "/v1/conversations/{conversationId}/prompt"}, s.handlePromptConversation},
+		{Route{http.MethodPost, "/v1/conversations/{conversationId}/cancel"}, s.handleCancelConversation},
+		{Route{http.MethodPost, "/v1/conversations/{conversationId}/use"}, s.handleUseConversation},
+		{Route{http.MethodGet, "/v1/models"}, s.handleModels},
+		{Route{http.MethodGet, "/v1/defaults"}, s.handleGetDefaults},
+		{Route{http.MethodPut, "/v1/defaults"}, s.handlePutDefaults},
 	}
 }
 

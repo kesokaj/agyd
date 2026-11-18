@@ -78,7 +78,7 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 
 	srv := &http.Server{
 		Addr:              cfg.Addr(),
-		Handler:           newMux(log, acpClient, cfg.Workspace, extraHosts...),
+		Handler:           newMux(log, acpClient, mgr, cfg.Workspace, extraHosts...),
 		ReadHeaderTimeout: 5 * time.Second,
 		ReadTimeout:       15 * time.Second,
 		WriteTimeout:      30 * time.Second,

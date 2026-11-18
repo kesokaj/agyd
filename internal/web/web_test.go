@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"strings"
 	"testing"
 
 	"agyd/internal/api"
@@ -73,15 +74,7 @@ func TestOpenAPIRoutesMatchAPI(t *testing.T) {
 			if method == "parameters" {
 				continue
 			}
-			// capitalize method
-			m := "GET"
-			if method == "post" {
-				m = "POST"
-			}
-			if method == "delete" {
-				m = "DELETE"
-			}
-			openapiMap[m+" "+path] = true
+			openapiMap[strings.ToUpper(method)+" "+path] = true
 		}
 	}
 

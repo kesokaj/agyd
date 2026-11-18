@@ -7,16 +7,16 @@
 
 ## Now
 
-Phase 3 — HTTP API (`PLAN-model-selection`, D2/D5/D7, D10-D21): freeze `openapi.json`, `/v1/conversations` + `/v1/current` + `/v1/defaults` + `/v1/models`, `Agyd-*` headers, handlers on `conversation.Manager`.
+Phase 4 — CLI client (`PLAN-model-selection`, D8/D18): `agyd ask|new|list|use|current|model|models|defaults` against the Phase 3 API, `--json`, the info line, serve vs client dispatch.
 
 - [x] Phase 0: ACP method check (live probe) and cold-read fold-in
 - [x] Phase 1: config layering and defaults
 - [x] Phase 2: ACP plus current conversation
-- [ ] Phase 3: HTTP API
+- [x] Phase 3: HTTP API
+- [ ] Phase 4: CLI client
 
 ## Next
 
-- Phase 4 — CLI client (`agyd ask|new|list|use|current|model|models|defaults`, `--json`).
 - Phase 5 — docs, ADR-005, GUIDE-testing/DEPLOY-local updates, reviewer + security, live smoke.
 
 ## Backlog

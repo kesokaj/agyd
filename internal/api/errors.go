@@ -8,6 +8,7 @@ import (
 	"net/http"
 
 	"agyd/internal/acp"
+	"agyd/internal/conversation"
 )
 
 const errorDomain = "agyd.local"
@@ -27,11 +28,22 @@ func (s *server) classifyError(r *http.Request, err error) *apiError {
 	if errors.As(err, &ae) {
 		return ae
 	}
+	// ErrInvalidArgument also wraps the agent's *acp.RPCError, so it is
+	// matched before the generic RPC case below.
+	if errors.Is(err, conversation.ErrInvalidSetting) || errors.Is(err, acp.ErrInvalidArgument) {
+		return &apiError{Status: http.StatusBadRequest, Code: "INVALID_ARGUMENT", Reason: "INVALID_SETTING", Msg: err.Error()}
+	}
 	if errors.Is(err, acp.ErrSessionNotFound) {
-		return &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Reason: "SESSION_NOT_FOUND", Msg: "session not found"}
+		return &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Reason: "CONVERSATION_NOT_FOUND", Msg: "conversation not found"}
+	}
+	if errors.Is(err, conversation.ErrNoCurrent) {
+		return &apiError{Status: http.StatusNotFound, Code: "NOT_FOUND", Reason: "NO_CURRENT_CONVERSATION", Msg: "no current conversation; create one or use one"}
+	}
+	if errors.Is(err, conversation.ErrNoModels) {
+		return &apiError{Status: http.StatusServiceUnavailable, Code: "UNAVAILABLE", Reason: "MODELS_UNKNOWN", Msg: err.Error()}
 	}
 	if errors.Is(err, acp.ErrPromptInFlight) {
-		return &apiError{Status: http.StatusConflict, Code: "ABORTED", Reason: "PROMPT_IN_FLIGHT", Msg: "a prompt turn is already in flight for this session"}
+		return &apiError{Status: http.StatusConflict, Code: "ABORTED", Reason: "PROMPT_IN_FLIGHT", Msg: "a prompt turn is in flight for this conversation"}
 	}
 	if errors.Is(err, acp.ErrInvalidConfig) {
 		return &apiError{Status: http.StatusBadRequest, Code: "INVALID_ARGUMENT", Reason: "INVALID_CWD", Msg: err.Error()}

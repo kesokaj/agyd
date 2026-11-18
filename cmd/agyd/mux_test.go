@@ -7,11 +7,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+
+	"agyd/internal/conversation"
 )
 
 func TestMuxUnknownPathJSON(t *testing.T) {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
-	mux := newMux(log, nil, "/tmp")
+	mux := newMux(log, nil, conversation.New(conversation.Options{}), "/tmp")
 
 	req := httptest.NewRequest("GET", "/v1/typo", nil)
 	req.Host = "localhost" // Bypass host guard
@@ -40,14 +42,14 @@ func TestMuxUnknownPathJSON(t *testing.T) {
 }
 
 func TestMuxIsGuarded(t *testing.T) {
-	mux := newMux(slog.New(slog.NewJSONHandler(io.Discard, nil)), nil, "/tmp")
+	mux := newMux(slog.New(slog.NewJSONHandler(io.Discard, nil)), nil, conversation.New(conversation.Options{}), "/tmp")
 	tests := []struct {
 		name, method, path, host, fetchSite string
 	}{
 		{"foreign host on docs", http.MethodGet, "/docs", "evil.example", ""},
 		{"foreign host on api", http.MethodGet, "/v1/status", "evil.example:8080", ""},
-		{"cross-site delete", http.MethodDelete, "/v1/sessions/x", "localhost:8080", "cross-site"},
-		{"cross-site cancel", http.MethodPost, "/v1/sessions/x/cancel", "localhost:8080", "cross-site"},
+		{"cross-site delete", http.MethodDelete, "/v1/conversations/x", "localhost:8080", "cross-site"},
+		{"cross-site cancel", http.MethodPost, "/v1/conversations/x/cancel", "localhost:8080", "cross-site"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
