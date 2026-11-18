@@ -7,16 +7,14 @@
 
 ## Now
 
-`PLAN-folder-isolation` (`ADR-006`; Phases 0-2 complete). Active: **Phase 3: port 8080, then 3000** — default port fallback and `agyd` identity check on `/healthz`.
+`PLAN-folder-isolation` (`ADR-006`; Phases 0-3 complete, Phase 4a superseded by D7). Active: **Phase 4b: if S1 does not isolate (minimal)** — one `agy acp` process per folder (`exec.Cmd.Dir` = folder).
 
-- [ ] No port set: try 8080; if it is in use, use 3000; if both are in use, exit with an error naming `-port`.
-- [ ] An explicit `-port` or `AGYD_PORT` that is in use -> error, no fallback. agyd just tries to listen; no pre-check, so no race.
-- [ ] `/healthz` names the service (`"service":"agyd"`), so the CLI can tell agyd from `gnubby-ss`.
-- [ ] CLI: `AGYD_URL` or `AGYD_PORT` if set, else probe 8080, then 3000.
-- [ ] Tests: 8080 held -> 3000; both held -> error; explicit port held -> error; the CLI skips a non-agyd 8080.
+- [ ] One agy process per folder (`exec.Cmd.Dir` = that folder), started on the first conversation there and stopped when its last conversation closes.
+- [ ] Routing comes from the folder stored in `state.json` (Phase 1).
+- [ ] Tests with two fake ACP processes, then a live leak test.
 - [ ] Checkpoint: change record, commit and push, handoff.
 
-Remaining phases: P4b per-folder `agy acp` process (`cmd.Dir = folder`) - P5 `/clear` (new conversation, old kept in history) - P6 405 on web routes.
+Remaining phases: P5 `/clear` (new conversation, old kept in history) - P6 405 on web routes.
 
 ## Next
 

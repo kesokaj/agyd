@@ -127,7 +127,7 @@ curl -X DELETE "http://127.0.0.1:8080/v1/conversations/$ID"
 |---|---|---|
 | `GET` | `/docs` | Swagger UI (`/` redirects here) |
 | `GET` | `/openapi.json` | OpenAPI 3.1 spec, for client generators |
-| `GET` | `/healthz` | Liveness: `204` |
+| `GET` | `/healthz` | Liveness and service identity: `200` `{"service":"agyd"}` |
 | `GET` | `/v1/status` | Agent readiness, version, policy, workspace |
 | `GET` | `/v1/current` | The current conversation (`404` if none) |
 | `PATCH` | `/v1/current` | Change its `model`, `thinkingLevel` or `mode` |
@@ -187,7 +187,7 @@ flowchart LR
 | `-mode` | `AGYD_MODE` | agy's default | Agent mode: `default`, `accept-edits` or `plan` |
 | `-no-prompt` | `AGYD_NO_PROMPT` | `false` | Never ask for the model at startup |
 | `-host` | `AGYD_HOST` | `127.0.0.1` | Listen address: an IP or `localhost`. `0.0.0.0` listens on all IPv4 interfaces, `::` on all IPv6 ones (see [Safety](#safety)) |
-| `-port` | `AGYD_PORT` | `8080` | Listen port |
+| `-port` | `AGYD_PORT` | `8080` (then `3000`) | Listen port (falls back to `3000` when unset and `8080` is taken; explicit port never falls back) |
 | `-workspace` | `AGYD_WORKSPACE` | current folder | Default folder for new conversations (real path, no symlinks) |
 | `-state-dir` | `AGYD_STATE_DIR` | `~/.config/agyd` | Directory holding `state.json` (must be absolute) |
 | `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for agent tool calls |
@@ -197,7 +197,7 @@ flowchart LR
 - **`state.json`** lives in `AGYD_STATE_DIR` (must be an absolute path when set), else `$XDG_CONFIG_HOME/agyd/` (when absolute), else `~/.config/agyd/`. It is flat (no longer keyed by port), holding `currentConversationId`, `defaults` (`model`, `thinkingLevel`, `mode`), and `conversations` (remembered folders and settings). It is written atomically via temp file + sync + rename with mode `0600` (directory `0700`) and read non-blocking (`O_NONBLOCK`) as a regular file capped at 4 MiB.
 - **Saved defaults** in `state.json` are written by the startup question, `agyd defaults --model ...`, and `PUT /v1/defaults`. Startup flags or env vars override saved defaults for the running process without overwriting `state.json` on disk.
 - **The startup question** appears only in an interactive terminal when no flag, env var, or saved default sets a model. `-no-prompt`, or starting without a terminal, skips the question and uses agy's default.
-- **The CLI** finds the server through `--host`/`--port`, then `AGYD_HOST`/`AGYD_PORT` in your shell, falling back to `127.0.0.1:8080` (neither `config.env` nor `./.env` are read). `0.0.0.0` dials `127.0.0.1`.
+- **The CLI** finds the server through `--host`/`--port`, then `AGYD_URL`, then `AGYD_HOST`/`AGYD_PORT` in your shell; otherwise it probes `GET /healthz` on `8080` then `3000`, accepting only `200` JSON `{"service":"agyd"}` (neither `config.env` nor `./.env` are read). `0.0.0.0` and `::` dial loopback.
 
 ```bash
 agyd -port 9090 -workspace ~/code/sandbox -permission-policy deny_all
@@ -238,7 +238,7 @@ To run `agyd` inside a container:
 | Symptom | Fix |
 |---|---|
 | `401 ACP_AUTH_REQUIRED` | Sign in: run `agy` once in a terminal, then retry |
-| `agyd ask` says it cannot connect | Start `agyd` first, or point the CLI at it with `--port`/`AGYD_PORT` |
+| `agyd ask` says it cannot connect | Start `agyd` first, or point the CLI at it with `--port`, `AGYD_PORT` or `AGYD_URL` |
 | `GET /v1/status` returns `500` or `502` | `agy` failed to start. Check it is on `PATH`, or pass `-agy /full/path/to/agy`, and read `agyd`'s log |
 | `400 INVALID_SETTING` | Use a value from `agyd models` |
 | `400 INVALID_CWD` | Use a real absolute path without symlinks, e.g. `"$(pwd -P)"` (or the real path named in the error), and not under `~/.gemini` |
@@ -246,7 +246,7 @@ To run `agyd` inside a container:
 | `404` on `/v1/sessions/...` | Renamed to `/v1/conversations/...` (ADR-005) |
 | `409 PROMPT_IN_FLIGHT` | Wait for the turn to finish, or cancel it first (`POST /v1/cancel`, or Ctrl-C in `agyd ask`) |
 | Startup asks for a model every time | Answer `y` to "Save as default", or set `-model`/`AGYD_MODEL` |
-| Port already in use | `agyd -port 9090`, then `agyd ask --port 9090 ...` |
+| Port already in use (`8080` and `3000`, or explicit `-port`) | `agyd -port 9090`, then `agyd ask --port 9090 ...` (or `export AGYD_PORT=9090`) |
 
 ## Development
 

@@ -6,11 +6,10 @@ import (
 	"flag"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
+	"time"
 )
 
 // The agyd CLI (D8): bare `agyd` or `agyd serve` runs the server; the
@@ -23,6 +22,8 @@ type cliEnv struct {
 	getenv         func(string) string
 	getwd          func() (string, error)
 	httpClient     *http.Client
+	probePorts     []int
+	probeTimeout   time.Duration
 }
 
 func osCLIEnv() cliEnv {
@@ -41,6 +42,7 @@ func osCLIEnv() cliEnv {
 type cliOpts struct {
 	json                  bool
 	host, port            string
+	hostSet, portSet      bool
 	model, thinking, mode string
 	conversation          string
 }
@@ -123,7 +125,7 @@ func clientUsage() string {
 	}
 	b.WriteString("\nEvery command prints the conversation, model and thinking level to stderr,\n")
 	b.WriteString("and takes --json (raw API response on stdout), --host and --port\n")
-	b.WriteString("(default: AGYD_HOST/AGYD_PORT from the environment, else 127.0.0.1:8080).\n")
+	b.WriteString("(default: AGYD_URL or AGYD_HOST/AGYD_PORT from the environment, else probes 127.0.0.1:8080 then 3000).\n")
 	return b.String()
 }
 
@@ -143,12 +145,12 @@ func runClient(ctx context.Context, name string, args []string, env cliEnv) int 
 		fmt.Fprintf(env.stderr, "agyd %s: %v\n", name, err)
 		return 2
 	}
-	base, err := clientBaseURL(o, env)
+	target, err := resolveClientTarget(o, env)
 	if err != nil {
 		fmt.Fprintf(env.stderr, "agyd %s: %v\n", name, err)
 		return 2
 	}
-	c := &cli{env: env, base: base, json: o.json}
+	c := &cli{env: env, base: target.base, candidates: target.candidates, json: o.json}
 	if err := cmd.run(ctx, c, o, pos); err != nil {
 		var ue usageErr
 		if errors.As(err, &ue) {
@@ -174,7 +176,7 @@ func parseClientArgs(name string, cmd cliCommand, args []string, env cliEnv) (*c
 	fs.SetOutput(io.Discard)
 	fs.BoolVar(&o.json, "json", false, "print the raw API response as JSON on stdout")
 	fs.StringVar(&o.host, "host", "", "agyd address (env AGYD_HOST; 0.0.0.0 dials 127.0.0.1)")
-	fs.StringVar(&o.port, "port", "", "agyd port (env AGYD_PORT)")
+	fs.StringVar(&o.port, "port", "", "agyd port (env AGYD_PORT; unset probes 8080 then 3000, unless AGYD_URL is set)")
 	if cmd.flags != nil {
 		cmd.flags(fs, o)
 	}
@@ -189,6 +191,14 @@ func parseClientArgs(name string, cmd cliCommand, args []string, env cliEnv) (*c
 			}
 			return nil, nil, err
 		}
+		fs.Visit(func(f *flag.Flag) {
+			switch f.Name {
+			case "host":
+				o.hostSet = true
+			case "port":
+				o.portSet = true
+			}
+		})
 		rest := fs.Args()
 		consumed := args[:len(args)-len(rest)]
 		if len(consumed) > 0 && consumed[len(consumed)-1] == "--" {
@@ -216,36 +226,4 @@ func argCount(cmd cliCommand) string {
 	default:
 		return fmt.Sprintf("%d to %d arguments", cmd.minArgs, cmd.maxArgs)
 	}
-}
-
-// clientBaseURL resolves where agyd listens (ADR-006): --host/--port, then
-// AGYD_HOST/AGYD_PORT in the environment, else 127.0.0.1:8080. An unspecified
-// bind address (0.0.0.0, ::) dials the loopback address of the same family.
-func clientBaseURL(o *cliOpts, env cliEnv) (string, error) {
-	pick := func(flagVal, key, fallback string) string {
-		if flagVal != "" {
-			return flagVal
-		}
-		if v := env.getenv(key); v != "" {
-			return v
-		}
-		return fallback
-	}
-	host := strings.ToLower(strings.TrimSpace(pick(o.host, "AGYD_HOST", "127.0.0.1")))
-	host = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]")
-	port := strings.TrimSpace(pick(o.port, "AGYD_PORT", "8080"))
-	ip := net.ParseIP(host)
-	switch {
-	case host == "localhost":
-	case ip == nil:
-		return "", fmt.Errorf("invalid host %q: want an IP address or localhost", host)
-	case ip.IsUnspecified() && ip.To4() != nil:
-		host = "127.0.0.1"
-	case ip.IsUnspecified():
-		host = "::1"
-	}
-	if n, err := strconv.Atoi(port); err != nil || n < 1 || n > 65535 {
-		return "", fmt.Errorf("invalid port %q: want 1-65535", port)
-	}
-	return "http://" + net.JoinHostPort(host, port), nil
 }

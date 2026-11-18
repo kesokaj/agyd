@@ -7,11 +7,11 @@ Status: agreed · Last updated: 2026-11-18 · Requirements: [PRD.md](PRD.md) · 
 
 Implements: M1 · Spec: `SPEC-agy-api-acp-gateway` · Decisions: `ADR-004`, `ADR-005`, `ADR-006`
 
-The first argument picks the mode: none, a flag, or `serve` starts the server; a known command name runs the client (T7). Serve resolves settings through flags and `AGYD_*` env vars, falling back to saved defaults in `state.json` (for model, thinking, mode), then built-in defaults. It validates settings, starts the ACP client, runs `Manager.Startup` (60 s), composes `internal/web` and `internal/api` under `api.Guard`, and shuts down on `SIGINT`/`SIGTERM`.
+The first argument picks the mode: none, a flag, or `serve` starts the server; a known command name runs the client (T7). Serve resolves settings through flags and `AGYD_*` env vars, falling back to saved defaults in `state.json` (for model, thinking, mode), then built-in defaults. It validates settings, binds the listen socket (`8080` then `3000` when unset; an explicit `-port` or `AGYD_PORT` never falls back), starts the ACP client, runs `Manager.Startup` (60 s), composes `internal/web` and `internal/api` under `api.Guard`, and shuts down on `SIGINT`/`SIGTERM`.
 
 - **Interfaces:** flags `-host`, `-port`, `-workspace`, `-state-dir`, `-permission-policy`, `-agy`, `-acp-args`, `-model`, `-thinking`, `-mode`, `-no-prompt`, `-h`; each has an `AGYD_*` env twin. Precedence: flags > `AGYD_*` env vars > saved defaults in `state.json` > built-in defaults.
 - **Startup picker** (`picker.go`, `startup.go`, `tty_*.go`): runs only on a real terminal (`TIOCGETA`/`TIOCGWINSZ` ioctl, never `/dev/null`), with agy ready, when no flag, env var, or saved default set a model and `-no-prompt` is off. It offers agy's models and thinking levels and, on "save", writes them to `state.json` defaults via Manager.
-- **Errors:** exit `1` with a JSON `ERROR` line on invalid host/port/policy/state-dir/workspace (including missing directories, `.gemini`, or any symlink in `-workspace`/`AGYD_WORKSPACE`, naming the real path), unknown flags, positional arguments, or a missing `agy` on `$PATH`. A non-loopback `-host` logs a `WARNING` naming the accepted hosts.
+- **Errors:** exit `1` with a JSON `ERROR` line on invalid host/port/policy/state-dir/workspace (including missing directories, `.gemini`, or any symlink in `-workspace`/`AGYD_WORKSPACE`, naming the real path), unknown flags, positional arguments, a missing `agy` on `$PATH`, or an in-use port (naming both `8080` and `3000` plus `-port` when both default ports are held). A non-loopback `-host` logs a `WARNING` naming the accepted hosts.
 
 ## T2 — `internal/acp` (ACP v1 JSON-RPC 2.0 stdio client)
 
@@ -28,7 +28,7 @@ Manages the `agy acp` child over NDJSON-RPC 2.0. It multiplexes calls, fans `ses
 
 Implements: M3 · Spec: `SPEC-agy-api-acp-gateway` · Decisions: `ADR-005`, `ADR-006`
 
-Serves `/healthz`, `/v1/status`, `/v1/current` (GET, PATCH), `/v1/prompt`, `/v1/cancel`, `/v1/conversations` (POST, GET), `/v1/conversations/{conversationId}` (GET, PATCH, DELETE) with `/prompt`, `/cancel`, `/use`, `/v1/models`, and `/v1/defaults` (GET, PUT; PUT persists to `state.json`). Handlers call the `conversation.Manager`; prompts and cancels go to `acp.Service`.
+Serves `/healthz` (`200 {"service":"agyd"}`), `/v1/status`, `/v1/current` (GET, PATCH), `/v1/prompt`, `/v1/cancel`, `/v1/conversations` (POST, GET), `/v1/conversations/{conversationId}` (GET, PATCH, DELETE) with `/prompt`, `/cancel`, `/use`, `/v1/models`, and `/v1/defaults` (GET, PUT; PUT persists to `state.json`). Handlers call the `conversation.Manager`; prompts and cancels go to `acp.Service`.
 
 - **Interfaces:** `NewHandler(log, svc acp.Service, mgr *conversation.Manager, cfg Config) http.Handler`; `Routes() []Route` (checked against `openapi.json`); `Guard(next, extraHosts...)` (Host allowlist, `403 FORBIDDEN_HOST`, `http.CrossOriginProtection`).
 - **Headers:** `Agyd-Conversation`, `Agyd-Model`, `Agyd-Thinking-Level`, `Agyd-Mode` on every `/healthz` and `/v1/*` response (empty values omitted).
@@ -66,7 +66,7 @@ Implements: M7 · Decisions: `ADR-005`, `ADR-006`
 
 `ask`, `new`, `list`, `use`, `current`, `model`, `models`, `defaults`, `help`: a stdlib HTTP client of a running agyd.
 
-- **Base URL:** `--host`/`--port` > shell `AGYD_HOST`/`AGYD_PORT` > `127.0.0.1:8080` (neither `config.env` nor `./.env` are read); `0.0.0.0`/`::` dial loopback.
+- **Base URL:** `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe on `8080` then `3000` (`cli_target.go`; 1 s per-probe timeout, requires `200` `application/json` `{"service":"agyd"}`; neither `config.env` nor `./.env` are read); `0.0.0.0`/`::` dial loopback.
 - **Output:** one stderr info line (`agyd: conversation=... model=... thinking=... mode=...`) from the `Agyd-*` headers; `ask` streams SSE text to stdout and reads the prompt from stdin when none is given; `agyd defaults --model ...` prints `(saved to state.json)`; `--json` prints the raw response.
 - **Errors:** usage errors send nothing (exit 2); a non-2xx prints the AIP-193 message (exit 1); an unreachable server names the URL. The client never follows redirects.
 
@@ -90,10 +90,10 @@ Every component in `SDD.md` maps to its technical design section and test suite.
 
 | Component | Section | Verified by |
 |---|---|---|
-| M1 | T1 | `TestConfigFromEnvAndFlags`, `TestWorkspaceRejectsSymlinks`, `TestDispatchServeVersusClient`, `TestPickDefaults`, `TestPickDefaultsWithoutOptions`, `TestWantPicker`, `TestFileIsTerminal`, `TestRestartPreservesStateAcrossSIGTERM`, `TestMuxIsGuarded`, `TestMuxUnknownPathJSON`, `TestListenNetwork`, `TestExposedHosts`, `TestLocalURL`, `TestWildcardV4DoesNotListenOnV6` |
+| M1 | T1 | `TestConfigFromEnvAndFlags`, `TestListenServeFallback`, `TestServeExplicitPortInUse`, `TestRunLogsFallbackAndNonLoopbackWarningsAtBind`, `TestWorkspaceRejectsSymlinks`, `TestDispatchServeVersusClient`, `TestPickDefaults`, `TestPickDefaultsWithoutOptions`, `TestWantPicker`, `TestFileIsTerminal`, `TestRestartPreservesStateAcrossSIGTERM`, `TestMuxIsGuarded`, `TestMuxUnknownPathJSON`, `TestListenNetwork`, `TestExposedHosts`, `TestLocalURL`, `TestWildcardV4DoesNotListenOnV6` |
 | M2 | T2 | `TestClientInitializeAndSessionLifecycle`, `TestClientPromptStreamingAndPermission`, `TestClientCancelAndCrashRecovery`, `TestSessionConfigOptions`, `TestListAndResumeAgentSessions`, `TestSessionRejectsSymlinkCwd`, `TestSetConfigAndCloseRefusedDuringTurn`, `TestParseConfigOptionsSkipsUnknownShapes`, `TestPermissionDecisionLogged`, `TestPermissionDecisionMalformedAndOversized`, `TestClipBoundsAndSanitizes`, `TestUnsupportedAgentRequestLogged` |
 | M3 | T3 | `TestStatusAndHealthEndpoints`, `TestCreateConversation`, `TestListAndGetConversations`, `TestPatchSettings`, `TestDeleteCurrentClearsPointer`, `TestUseSwitchesPromptTarget`, `TestPatchAndDeleteDuringTurn`, `TestPromptCurrentAutoCreates`, `TestPromptSSEAndErrors`, `TestCancelEndpoints`, `TestHeadersOnEveryResponse`, `TestDefaultsRoundTrip`, `TestDefaultsRejectInjection`, `TestModels`, `TestClassifyErrorMapping`, `TestErrorShapes`, `TestCwdRejectsSymlinks`, `TestCrossOriginRefusalIsJSON`, `TestClientClosedRequestIsNotAServerError`, `TestGuard`, `TestGuardExtraHosts` |
 | M4 | T4 | `TestWebRoutes`, `TestOpenAPIRoutesMatchAPI` |
 | M5 | T5 | `TestStateDir`, `TestValidSettingValue`, `TestStateStoreFlatSchemaAndPermissions`, `TestStateStoreUpgradesLegacyInstancesFileAsEmpty`, `TestStateStoreCorruptAndValidationErrors`, `TestStateStoreRefusesFIFOWithoutBlocking`, `TestStateStoreConcurrentSaves`, `TestStateStoreValidationAndSymlinkHardening` |
 | M6 | T6 | `TestStartupCreatesAndSavesState`, `TestStartupResumesFromStateAndReappliesSettings`, `TestStartupFallsBackToFresh`, `TestStartupLogsRejectedDefault`, `TestStartupNilStateAndSettingsOfSanitizes`, `TestResolveConcurrentEmptyPointerCreatesOne`, `TestResolveResumesCurrentAfterAgentRestart`, `TestResolveExplicitIDIsLiveOnly`, `TestUseSwitchesAndResumes`, `TestCreateSettingsAreStrict`, `TestUpdateAndDelete`, `TestUpdateRereadsAfterLock`, `TestDeleteNonLiveCurrentClearsPointer`, `TestSetDefaultsAndCreateSerializeStateSnapshots`, `TestModelsFollowLiveCurrent`, `TestDefaultsAndModels`, `TestListMergesLiveAndHistory`, `TestConcurrentUseAndPrompt` |
-| M7 | T7 | `TestCLIAskStreaming`, `TestCLICommandsHitTheirEndpoints`, `TestClientBaseURL`, `TestClientHelp`, `TestCLIErrorsShowInfoLineAndEnvelope`, `TestCLIJSONPrintsTheRawResponse`, `TestCLIUnreachableServer`, `TestCLIUsageErrorsSendNothing`, `TestCLIDoesNotFollowRedirects`; live smoke 1-6 (`GUIDE-testing`) |
+| M7 | T7 | `TestCLIAskStreaming`, `TestCLICommandsHitTheirEndpoints`, `TestClientBaseURL`, `TestCLIProbeDiscovery`, `TestClientHelp`, `TestCLIErrorsShowInfoLineAndEnvelope`, `TestCLIJSONPrintsTheRawResponse`, `TestCLIUnreachableServer`, `TestCLIUsageErrorsSendNothing`, `TestCLIDoesNotFollowRedirects`; live smoke 1-6 (`GUIDE-testing`) |

@@ -147,7 +147,7 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 	t.Run("port must be 1-65535", func(t *testing.T) {
 		for port, ok := range map[string]bool{
 			"1": true, "8080": true, "65535": true,
-			"0": false, "65536": false, "-1": false, "http": false, "": false,
+			"0": false, "65536": false, "-1": false, "+8080": false, "http": false, "": false,
 		} {
 			_, err := loadConfig([]string{"-port=" + port}, noEnv, mockGetwd, mockLookPath)
 			if (err == nil) != ok {
@@ -214,6 +214,28 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 		cfg, err := loadConfig(nil, noEnv, mockGetwd, mockLookPath)
 		if err != nil || cfg.Model != "" || cfg.Thinking != "" || cfg.Mode != "" || cfg.NoPrompt {
 			t.Fatalf("cfg = %+v, err = %v; want empty settings", cfg, err)
+		}
+	})
+
+	t.Run("PortExplicit distinguishes unset port from explicit -port or AGYD_PORT", func(t *testing.T) {
+		unsetCfg, err := loadConfig(nil, noEnv, mockGetwd, mockLookPath)
+		if err != nil {
+			t.Fatalf("unset loadConfig: %v", err)
+		}
+		if unsetCfg.Port != 8080 || unsetCfg.PortExplicit {
+			t.Errorf("unset port: Port=%d PortExplicit=%v, want 8080 and false", unsetCfg.Port, unsetCfg.PortExplicit)
+		}
+
+		flag8080, err := loadConfig([]string{"-port", "8080"}, noEnv, mockGetwd, mockLookPath)
+		if err != nil || flag8080.Port != 8080 || !flag8080.PortExplicit {
+			t.Errorf("-port 8080: Port=%d PortExplicit=%v err=%v, want 8080 and true", flag8080.Port, flag8080.PortExplicit, err)
+		}
+
+		env8080, err := loadConfig(nil, func(k string) string {
+			return map[string]string{"HOME": "/mock/home", "AGYD_PORT": "8080"}[k]
+		}, mockGetwd, mockLookPath)
+		if err != nil || env8080.Port != 8080 || !env8080.PortExplicit {
+			t.Errorf("AGYD_PORT=8080: Port=%d PortExplicit=%v err=%v, want 8080 and true", env8080.Port, env8080.PortExplicit, err)
 		}
 	})
 }

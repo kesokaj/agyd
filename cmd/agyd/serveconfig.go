@@ -17,6 +17,7 @@ import (
 type appConfig struct {
 	Host             string
 	Port             int
+	PortExplicit     bool
 	ACPBin           string
 	ACPArgs          []string
 	Workspace        string
@@ -45,7 +46,7 @@ type rawFlags struct {
 	host, port, bin, args, workspace, stateDir, policy string
 	model, thinking, mode                              string
 	noPrompt                                           bool
-	stateDirSet                                        bool
+	portSet, stateDirSet                               bool
 }
 
 func envOr(getenv func(string) string, key, fallback string) string {
@@ -62,7 +63,7 @@ func newServeFlags(getenv func(string) string, wd string, noPrompt bool) (*flag.
 	fs := flag.NewFlagSet("agyd", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
 	fs.StringVar(&r.host, "host", envOr(getenv, "AGYD_HOST", "127.0.0.1"), "listen address: an IP or localhost; 0.0.0.0 listens on all interfaces (env AGYD_HOST)")
-	fs.StringVar(&r.port, "port", envOr(getenv, "AGYD_PORT", "8080"), "listen port, 1-65535 (env AGYD_PORT)")
+	fs.StringVar(&r.port, "port", envOr(getenv, "AGYD_PORT", "8080"), "listen port, 1-65535; when unset, tries 8080 then 3000 (env AGYD_PORT)")
 	fs.StringVar(&r.bin, "agy", envOr(getenv, "AGYD_AGY", "agy"), "agy executable (env AGYD_AGY)")
 	fs.StringVar(&r.args, "acp-args", envOr(getenv, "AGYD_ACP_ARGS", "acp"), "space-separated arguments for agy (env AGYD_ACP_ARGS)")
 	fs.StringVar(&r.workspace, "workspace", envOr(getenv, "AGYD_WORKSPACE", wd), "default conversation working directory (env AGYD_WORKSPACE)")
@@ -114,7 +115,10 @@ func loadConfig(args []string, getenv func(string) string, getwd func() (string,
 		return appConfig{}, fmt.Errorf("parsing flags: %w", err)
 	}
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "state-dir" {
+		switch f.Name {
+		case "port":
+			r.portSet = true
+		case "state-dir":
 			r.stateDirSet = true
 		}
 	})
@@ -131,14 +135,22 @@ func resolveStateDir(explicit string, explicitSet bool, getenv func(string) stri
 	return config.StateDir(getenv)
 }
 
+func parsePort(raw string) (int, error) {
+	n, err := strconv.ParseUint(strings.TrimSpace(raw), 10, 16)
+	if err != nil || n == 0 {
+		return 0, fmt.Errorf("invalid port %q: want 1-65535", raw)
+	}
+	return int(n), nil
+}
+
 func (r *rawFlags) validate(getenv func(string) string, lookPath func(string) (string, error)) (appConfig, error) {
 	host := strings.ToLower(strings.TrimSpace(r.host))
 	if host != "localhost" && net.ParseIP(host) == nil {
 		return appConfig{}, fmt.Errorf("invalid host %q: want an IP address or localhost, e.g. 127.0.0.1 or 0.0.0.0", r.host)
 	}
-	port, err := strconv.Atoi(strings.TrimSpace(r.port))
-	if err != nil || port < 1 || port > 65535 {
-		return appConfig{}, fmt.Errorf("invalid port %q: want 1-65535", r.port)
+	port, err := parsePort(r.port)
+	if err != nil {
+		return appConfig{}, err
 	}
 	if _, err := lookPath(r.bin); err != nil {
 		return appConfig{}, fmt.Errorf("agy not found on PATH; install agy-cli or pass -agy /path/to/agy")
@@ -164,7 +176,7 @@ func (r *rawFlags) validate(getenv func(string) string, lookPath func(string) (s
 		}
 	}
 	return appConfig{
-		Host: host, Port: port,
+		Host: host, Port: port, PortExplicit: r.portSet || getenv("AGYD_PORT") != "",
 		ACPBin: strings.TrimSpace(r.bin), ACPArgs: strings.Fields(r.args),
 		Workspace: ws, StateDir: stateDir, PermissionPolicy: policy,
 		Model: r.model, Thinking: r.thinking, Mode: r.mode, NoPrompt: r.noPrompt,

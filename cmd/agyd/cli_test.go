@@ -71,6 +71,8 @@ func (f *fakeAgyd) serve(w http.ResponseWriter, r *http.Request) {
 		_, _ = io.WriteString(w, body)
 	}
 	switch path := r.URL.Path; {
+	case path == "/healthz":
+		reply(http.StatusOK, `{"service":"agyd"}`+"\n")
 	case none && path == "/v1/current":
 		reply(http.StatusNotFound, noCurrent)
 	case strings.HasSuffix(path, "/prompt") && strings.Contains(r.Header.Get("Accept"), "text/event-stream"):
@@ -408,8 +410,8 @@ func TestClientHelp(t *testing.T) {
 	}
 }
 
-// TestClientBaseURL covers ADR-006: flag > shell env > built-in default,
-// ignoring both config.env and ./.env, and dialing loopback for unspecified binds.
+// TestClientBaseURL covers ADR-006: --host/--port > AGYD_URL / AGYD_HOST / AGYD_PORT >
+// probing 8080 then 3000, ignoring config.env and ./.env, and dialing loopback for unspecified binds.
 func TestClientBaseURL(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".config", "agyd")
@@ -424,21 +426,39 @@ func TestClientBaseURL(t *testing.T) {
 		t.Fatal(err)
 	}
 	tests := []struct {
-		name    string
-		home    string
-		env     map[string]string
-		opts    cliOpts
-		want    string
-		wantErr bool
+		name           string
+		home           string
+		env            map[string]string
+		opts           cliOpts
+		wantBase       string
+		wantCandidates []string
+		wantErr        bool
+		forbidInErr    string
 	}{
-		{"defaults", t.TempDir(), nil, cliOpts{}, "http://127.0.0.1:8080", false},
-		{"config.env and ./.env ignored", home, nil, cliOpts{}, "http://127.0.0.1:8080", false},
-		{"shell env, unspecified host dials loopback", home, map[string]string{"AGYD_HOST": "0.0.0.0", "AGYD_PORT": "9000"}, cliOpts{}, "http://127.0.0.1:9000", false},
-		{"flags beat env", home, map[string]string{"AGYD_PORT": "9000"}, cliOpts{host: "localhost", port: "9100"}, "http://localhost:9100", false},
-		{"IPv6 unspecified dials ::1", t.TempDir(), map[string]string{"AGYD_HOST": "::"}, cliOpts{}, "http://[::1]:8080", false},
-		{"bracketed IPv6", t.TempDir(), nil, cliOpts{host: "[::1]"}, "http://[::1]:8080", false},
-		{"bad host", t.TempDir(), nil, cliOpts{host: "evil.example"}, "", true},
-		{"bad port", t.TempDir(), nil, cliOpts{port: "70000"}, "", true},
+		{"defaults probe 8080 then 3000", t.TempDir(), nil, cliOpts{}, "", []string{"http://127.0.0.1:8080", "http://127.0.0.1:3000"}, false, ""},
+		{"config.env and ./.env ignored", home, nil, cliOpts{}, "", []string{"http://127.0.0.1:8080", "http://127.0.0.1:3000"}, false, ""},
+		{"shell env, unspecified host dials loopback", home, map[string]string{"AGYD_HOST": "0.0.0.0", "AGYD_PORT": "9000"}, cliOpts{}, "http://127.0.0.1:9000", nil, false, ""},
+		{"flags beat env and AGYD_URL", home, map[string]string{"AGYD_URL": "http://10.0.0.5:9000", "AGYD_PORT": "9000"}, cliOpts{host: "localhost", port: "9100", hostSet: true, portSet: true}, "http://localhost:9100", nil, false, ""},
+		{"--port flag beats AGYD_URL", home, map[string]string{"AGYD_URL": "http://10.0.0.5:9000"}, cliOpts{port: "9100", portSet: true}, "http://127.0.0.1:9100", nil, false, ""},
+		{"AGYD_URL beats AGYD_PORT", home, map[string]string{"AGYD_URL": "http://127.0.0.1:9200/", "AGYD_PORT": "9000"}, cliOpts{}, "http://127.0.0.1:9200", nil, false, ""},
+		{"AGYD_URL maps 0.0.0.0 and :: to loopback", home, map[string]string{"AGYD_URL": "http://0.0.0.0:9200"}, cliOpts{}, "http://127.0.0.1:9200", nil, false, ""},
+		{"AGYD_URL IPv6 unspecified", home, map[string]string{"AGYD_URL": "http://[::]:9200"}, cliOpts{}, "http://[::1]:9200", nil, false, ""},
+		{"AGYD_URL https hostname without port", home, map[string]string{"AGYD_URL": "https://agyd.internal"}, cliOpts{}, "https://agyd.internal", nil, false, ""},
+		{"IPv6 unspecified dials ::1 candidates", t.TempDir(), map[string]string{"AGYD_HOST": "::"}, cliOpts{}, "", []string{"http://[::1]:8080", "http://[::1]:3000"}, false, ""},
+		{"bracketed IPv6 candidates", t.TempDir(), nil, cliOpts{host: "[::1]", hostSet: true}, "", []string{"http://[::1]:8080", "http://[::1]:3000"}, false, ""},
+		{"bad host", t.TempDir(), nil, cliOpts{host: "evil.example", hostSet: true}, "", nil, true, ""},
+		{"bad port", t.TempDir(), nil, cliOpts{port: "70000", portSet: true}, "", nil, true, ""},
+		{"plus-prefixed port rejected", t.TempDir(), nil, cliOpts{port: "+8080", portSet: true}, "", nil, true, ""},
+		{"empty --port flag does not fall back to AGYD_PORT", t.TempDir(), map[string]string{"AGYD_PORT": "8080"}, cliOpts{port: "", portSet: true}, "", nil, true, ""},
+		{"empty --host flag does not fall back to AGYD_HOST", t.TempDir(), map[string]string{"AGYD_HOST": "127.0.0.1"}, cliOpts{host: "", hostSet: true}, "", nil, true, ""},
+		{"AGYD_URL wrong scheme", t.TempDir(), map[string]string{"AGYD_URL": "ftp://127.0.0.1:8080"}, cliOpts{}, "", nil, true, ""},
+		{"AGYD_URL schemeless", t.TempDir(), map[string]string{"AGYD_URL": "127.0.0.1:8080"}, cliOpts{}, "", nil, true, ""},
+		{"AGYD_URL with subpath", t.TempDir(), map[string]string{"AGYD_URL": "http://127.0.0.1:8080/v1"}, cliOpts{}, "", nil, true, ""},
+		{"AGYD_URL with query", t.TempDir(), map[string]string{"AGYD_URL": "http://127.0.0.1:8080?tok=secret123"}, cliOpts{}, "", nil, true, "secret123"},
+		{"AGYD_URL with userinfo redacts secret", t.TempDir(), map[string]string{"AGYD_URL": "http://user:supersecret@127.0.0.1:8080"}, cliOpts{}, "", nil, true, "supersecret"},
+		{"AGYD_URL empty port", t.TempDir(), map[string]string{"AGYD_URL": "http://127.0.0.1:"}, cliOpts{}, "", nil, true, ""},
+		{"AGYD_URL bad port", t.TempDir(), map[string]string{"AGYD_URL": "http://127.0.0.1:70000"}, cliOpts{}, "", nil, true, ""},
+		{"AGYD_URL whitespace only", t.TempDir(), map[string]string{"AGYD_URL": "   "}, cliOpts{}, "", nil, true, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -450,9 +470,12 @@ func TestClientBaseURL(t *testing.T) {
 				getenv: func(k string) string { return vals[k] },
 				getwd:  func() (string, error) { return project, nil },
 			}
-			got, err := clientBaseURL(&tt.opts, env)
-			if (err != nil) != tt.wantErr || got != tt.want {
-				t.Errorf("clientBaseURL = %q, %v; want %q, err %v", got, err, tt.want, tt.wantErr)
+			got, err := resolveClientTarget(&tt.opts, env)
+			if (err != nil) != tt.wantErr || got.base != tt.wantBase || !slices.Equal(got.candidates, tt.wantCandidates) {
+				t.Errorf("resolveClientTarget = %+v, %v; want base=%q candidates=%v err=%v", got, err, tt.wantBase, tt.wantCandidates, tt.wantErr)
+			}
+			if err != nil && tt.forbidInErr != "" && strings.Contains(err.Error(), tt.forbidInErr) {
+				t.Errorf("error leaked sensitive token %q: %v", tt.forbidInErr, err)
 			}
 		})
 	}

@@ -5,7 +5,7 @@ Status: agreed · Last updated: 2026-11-18 · Requirements: [PRD.md](PRD.md) · 
 
 ## Context
 
-`agyd` runs directly on the operator's machine, listening on `127.0.0.1:8080`. It supervises the host's installed `agy` CLI in `acp` mode, inheriting the operator's existing `~/.gemini` login without credentials in transit or containers. Its own state is a single `state.json` file in the state directory (`AGYD_STATE_DIR`, default `~/.config/agyd`).
+`agyd` runs directly on the operator's machine, listening on `127.0.0.1:8080` (falling back to `3000` when `8080` is in use and no port was set). It supervises the host's installed `agy` CLI in `acp` mode, inheriting the operator's existing `~/.gemini` login without credentials in transit or containers. Its own state is a single `state.json` file in the state directory (`AGYD_STATE_DIR`, default `~/.config/agyd`).
 
 ```mermaid
 flowchart LR
@@ -27,13 +27,13 @@ Every package has one responsibility.
 
 | ID | Component | Responsibility | Satisfies |
 |---|---|---|---|
-| M1 | `cmd/agyd` (serve) | Entry point and first-word dispatch (serve vs client), flag and `AGYD_*` env config with `-state-dir` support (`serveconfig.go`), Host allowlist for a non-loopback bind, startup conversation and model picker (`startup.go`, `picker.go`), mux composition wrapped in `api.Guard`, `log/slog`, graceful `SIGINT`/`SIGTERM` shutdown | — |
+| M1 | `cmd/agyd` (serve) | Entry point and first-word dispatch (serve vs client), flag and `AGYD_*` env config with `-state-dir` support (`serveconfig.go`), `8080` -> `3000` listen fallback (`listen.go`), Host allowlist for a non-loopback bind, startup conversation and model picker (`startup.go`, `picker.go`), mux composition wrapped in `api.Guard`, `log/slog`, graceful `SIGINT`/`SIGTERM` shutdown | — |
 | M2 | `internal/acp` | ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, `session/set_config_option`, `session/list`, `session/resume`, `session/update` fan-out, `session/request_permission` policy | — |
 | M3 | `internal/api` | REST and SSE handlers on the Manager, route table, `Agyd-*` response headers, Host validation and `http.CrossOriginProtection` (`api.Guard`), AIP-193 errors | — |
 | M4 | `internal/web` | Embedded OpenAPI 3.1 spec (`openapi.json`), vendored Swagger UI, root redirect, CSP/nosniff headers | — |
 | M5 | `internal/config` | Flat `state.json` store (`currentConversationId`, `defaults`, `conversations`), `AGYD_STATE_DIR` resolution, safe non-blocking regular file reading (capped at 4 MiB), `ValidSettingValue`, atomic 0600 writes | — |
 | M6 | `internal/conversation` | `Manager`: the one owner of current pointer, defaults, per-conversation memo settings, and full `state.json` snapshots under `saveMu` (lock order: `opMu -> saveMu -> mu`); startup flag/env defaults override without clobbering disk; resolve-or-create, use/resume, list merge with agy history | — |
-| M7 | `cmd/agyd` (client) | `agyd ask|new|list|use|current|model|models|defaults`: stdlib HTTP client of a running agyd, base URL from `--host`/`--port` > shell `AGYD_*` env > `127.0.0.1:8080`, stderr info line, `--json` | — |
+| M7 | `cmd/agyd` (client) | `agyd ask|new|list|use|current|model|models|defaults`: stdlib HTTP client of a running agyd, base URL from `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe of `8080` then `3000`, stderr info line, `--json` | — |
 
 ## Route table
 
@@ -43,7 +43,7 @@ All HTTP routes are exposed through the outer mux wrapped in `api.Guard` (ADR-00
 |---|---|---|
 | `GET /{$}` | `internal/web` | 302 redirect to `/docs` |
 | `GET /docs`, `GET /openapi.json`, `GET /static/*` | `internal/web` | Swagger UI, spec and assets |
-| `GET /healthz` | `internal/api` | Liveness: `204` |
+| `GET /healthz` | `internal/api` | Liveness and service identity: `200 {"service":"agyd"}` |
 | `GET /v1/status` | `internal/api` | ACP child readiness, backend info, permission policy, default `workspace` |
 | `GET`, `PATCH /v1/current` | `internal/api` | Current conversation; change its settings |
 | `POST /v1/prompt`, `POST /v1/cancel` | `internal/api` | Turn on the current conversation (auto-creates one); cancel it |
@@ -66,6 +66,7 @@ sequenceDiagram
   participant G as M6 Manager
   participant A as M2 acp
   M->>C: Resolve flags, AGYD_* env, -state-dir
+  M->>M: listen on host:port (8080 -> 3000 unless explicit)
   M->>G: Startup (60 s)
   G->>C: Load state.json (flat snapshot)
   alt saved conversation
@@ -76,7 +77,7 @@ sequenceDiagram
   opt TTY and no flag/env/saved default sets a model
     M->>M: picker: model, thinking, save to state.json?
   end
-  M->>M: listen on host:port
+  M->>M: serve HTTP requests
 ```
 
 ### `agyd ask` on the current conversation
@@ -110,7 +111,7 @@ Architectural choices link to their ADR records (`fyr record get ADR-NNN`).
 - Scope to `agy-cli` only; other ACP backends deferred — `ADR-003`.
 - Default to loopback but allow `-host 0.0.0.0` as an explicit, warned opt-in, with the Host guard extended to the machine's own IPs and hostname — `ADR-004` (amends `ADR-002`).
 - Rename `/v1/sessions` to `/v1/conversations` (no alias), add one current conversation with model/thinking/mode settings and saved defaults, layered config with a `./.env` allowlist, `session/resume`-only restarts, and the `agyd` CLI client in the same binary — rejected: a `/v1/sessions` alias, `session/load`, unrestricted `./.env`, a separate client binary — `ADR-005` (amended by `ADR-006`).
-- Eliminate `./.env` walking and `config.env` in favour of direct flags > `AGYD_*` environment variables > saved defaults in `state.json` > built-in defaults; replace per-port instances in `state.json` with a single flat snapshot (`currentConversationId`, `defaults`, `conversations`) located via `-state-dir`/`AGYD_STATE_DIR` (default `~/.config/agyd`), written atomically (0600) and read non-blocking (`O_NONBLOCK`, 4 MiB cap); reject symlinks anywhere in `-workspace`/`AGYD_WORKSPACE` or conversation `cwd` (`400 INVALID_CWD`, naming the real path); lock hierarchy `opMu -> saveMu -> mu`; client base URL from flags > env > `127.0.0.1:8080` — `ADR-006` (amends `ADR-005` and `ADR-002`).
+- Eliminate `./.env` walking and `config.env` in favour of direct flags > `AGYD_*` environment variables > saved defaults in `state.json` > built-in defaults; replace per-port instances in `state.json` with a single flat snapshot (`currentConversationId`, `defaults`, `conversations`) located via `-state-dir`/`AGYD_STATE_DIR` (default `~/.config/agyd`), written atomically (0600) and read non-blocking (`O_NONBLOCK`, 4 MiB cap); reject symlinks anywhere in `-workspace`/`AGYD_WORKSPACE` or conversation `cwd` (`400 INVALID_CWD`, naming the real path); lock hierarchy `opMu -> saveMu -> mu`; bind `8080` then `3000` when no port is set (explicit `-port`/`AGYD_PORT` never falls back), return `200 {"service":"agyd"}` on `GET /healthz`, and resolve client base URL via `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe of `8080` then `3000` — `ADR-006` (amends `ADR-005` and `ADR-002`).
 
 ## Cross-cutting
 

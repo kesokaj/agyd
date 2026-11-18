@@ -49,7 +49,15 @@ func Routes() []Route {
 	return out
 }
 
+// ServiceName identifies agyd in GET /healthz responses so clients probing
+// candidate ports can distinguish agyd from unrelated local listeners.
+const ServiceName = "agyd"
+
+type healthResponse struct {
+	Service string `json:"service"`
+}
+
 func (s *server) handleHealthz(w http.ResponseWriter, _ *http.Request) error {
-	w.WriteHeader(http.StatusNoContent)
+	writeJSON(w, http.StatusOK, healthResponse{Service: ServiceName})
 	return nil
 }

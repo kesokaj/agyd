@@ -70,8 +70,10 @@ func TestHelperServeAndACP(t *testing.T) {
 		os.Exit(0)
 	}
 	if os.Getenv("AGYD_TEST_ROLE") == "serve" {
+		extra := strings.Fields(os.Getenv("AGYD_TEST_SERVE_ARGS"))
 		_ = os.Unsetenv("AGYD_TEST_ROLE")
-		os.Args = []string{"agyd"}
+		_ = os.Unsetenv("AGYD_TEST_SERVE_ARGS")
+		os.Args = append([]string{"agyd"}, extra...)
 		main()
 		os.Exit(0)
 	}

@@ -45,6 +45,27 @@ func newLogger(w io.Writer) *slog.Logger {
 }
 
 func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
+	return runWithListen(ctx, log, cfg, net.Listen)
+}
+
+func runWithListen(ctx context.Context, log *slog.Logger, cfg appConfig, listen func(network, address string) (net.Listener, error)) error {
+	requestedPort := cfg.Port
+	ln, boundPort, err := listenServe(cfg, listen)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = ln.Close() }()
+	if boundPort != requestedPort {
+		log.Warn("default port in use, using fallback", "busyPort", requestedPort, "port", boundPort)
+	}
+	cfg.Port = boundPort
+
+	extraHosts := exposedHosts(cfg.Host, net.InterfaceAddrs, os.Hostname)
+	if !isLoopbackHost(cfg.Host) {
+		log.Warn("listening beyond loopback: anyone who can reach this address can drive agy as you; there is no API token",
+			"host", cfg.Host, "permissionPolicy", cfg.PermissionPolicy, "allowedHosts", extraHosts)
+	}
+
 	acpClient, err := acp.NewClient(acp.Config{
 		Binary:           cfg.ACPBin,
 		Args:             cfg.ACPArgs,
@@ -69,12 +90,6 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 		return nil
 	}
 
-	extraHosts := exposedHosts(cfg.Host, net.InterfaceAddrs, os.Hostname)
-	if !isLoopbackHost(cfg.Host) {
-		log.Warn("listening beyond loopback: anyone who can reach this address can drive agy as you; there is no API token",
-			"host", cfg.Host, "permissionPolicy", cfg.PermissionPolicy, "allowedHosts", extraHosts)
-	}
-
 	srv := &http.Server{
 		Addr:              cfg.Addr(),
 		Handler:           newMux(log, acpClient, mgr, cfg.Workspace, extraHosts...),
@@ -84,10 +99,6 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 		IdleTimeout:       120 * time.Second,
 	}
 
-	ln, err := net.Listen(listenNetwork(cfg.Host), cfg.Addr())
-	if err != nil {
-		return fmt.Errorf("listening on %s: %w", cfg.Addr(), err)
-	}
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 

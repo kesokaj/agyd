@@ -18,7 +18,7 @@
           "service"
         ],
         "responses": {
-          "204": {
+          "200": {
             "description": "OK",
             "headers": {
               "Agyd-Conversation": {
@@ -32,6 +32,13 @@
               },
               "Agyd-Mode": {
                 "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HealthResponse"
+                }
               }
             }
           },
@@ -947,6 +954,19 @@
   },
   "components": {
     "schemas": {
+      "HealthResponse": {
+        "type": "object",
+        "required": [
+          "service"
+        ],
+        "properties": {
+          "service": {
+            "type": "string",
+            "const": "agyd",
+            "example": "agyd"
+          }
+        }
+      },
       "StatusResponse": {
         "type": "object",
         "properties": {

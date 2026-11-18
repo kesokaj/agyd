@@ -11,8 +11,16 @@ import (
 func TestStatusAndHealthEndpoints(t *testing.T) {
 	e := newTestEnv(t)
 
-	t.Run("healthz returns 204", func(t *testing.T) {
-		want(t, e.do(http.MethodGet, "/healthz", ""), http.StatusNoContent, "")
+	t.Run("healthz returns 200 with service agyd", func(t *testing.T) {
+		rec := e.do(http.MethodGet, "/healthz", "")
+		want(t, rec, http.StatusOK, "")
+		if ct := rec.Header().Get("Content-Type"); ct != "application/json" {
+			t.Errorf("Content-Type = %q, want application/json", ct)
+		}
+		got := decode[map[string]any](t, rec)
+		if len(got) != 1 || got["service"] != "agyd" {
+			t.Errorf("healthz body = %+v, want {\"service\":\"agyd\"}", got)
+		}
 	})
 
 	t.Run("status returns 200 with the workspace", func(t *testing.T) {

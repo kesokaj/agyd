@@ -16,10 +16,11 @@ import (
 
 // cli is one client command's connection to a running agyd.
 type cli struct {
-	env    cliEnv
-	base   string      // http://host:port
-	json   bool        // --json: raw API responses on stdout
-	header http.Header // headers of the last response
+	env        cliEnv
+	base       string      // http(s)://host[:port] once pinned or probed
+	candidates []string    // candidate base URLs to probe on /healthz when base == ""
+	json       bool        // --json: raw API responses on stdout
+	header     http.Header // headers of the last response
 }
 
 // apiErr is an AIP-193 error envelope returned by agyd.
@@ -62,6 +63,10 @@ func decodeAPIErr(status int, body []byte) error {
 // send issues one request. The stdlib client sends Host as host:port, which
 // agyd's Host guard accepts for loopback, and no Origin, which passes CSRF.
 func (c *cli) send(ctx context.Context, method, path string, body any, accept string) (*http.Response, error) {
+	base, err := c.resolveBase(ctx)
+	if err != nil {
+		return nil, err
+	}
 	var rd io.Reader
 	if body != nil {
 		b, err := json.Marshal(body)
@@ -70,7 +75,7 @@ func (c *cli) send(ctx context.Context, method, path string, body any, accept st
 		}
 		rd = bytes.NewReader(b)
 	}
-	req, err := http.NewRequestWithContext(ctx, method, c.base+path, rd)
+	req, err := http.NewRequestWithContext(ctx, method, base+path, rd)
 	if err != nil {
 		return nil, err
 	}
@@ -83,7 +88,7 @@ func (c *cli) send(ctx context.Context, method, path string, body any, accept st
 		if ctx.Err() != nil {
 			return nil, fmt.Errorf("interrupted: %w", ctx.Err())
 		}
-		return nil, fmt.Errorf("cannot reach agyd at %s (is it running? start it with: agyd): %w", c.base, err)
+		return nil, fmt.Errorf("cannot reach agyd at %s (is it running? start it with: agyd): %w", base, err)
 	}
 	c.header = resp.Header
 	c.printInfo(resp.Header)

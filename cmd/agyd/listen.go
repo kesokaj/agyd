@@ -1,9 +1,12 @@
 package main
 
 import (
+	"errors"
+	"fmt"
 	"net"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // isLoopbackHost reports whether host is localhost or a loopback IP.
@@ -90,4 +93,45 @@ func listenNetwork(host string) string {
 	default:
 		return "tcp6"
 	}
+}
+
+var defaultServePorts = []int{8080, 3000}
+
+// candidatePorts returns the port(s) agyd attempts to bind: the single
+// requested port when -port or AGYD_PORT is set, else 8080 then 3000 (ADR-006).
+func candidatePorts(cfg appConfig) []int {
+	if cfg.PortExplicit {
+		return []int{cfg.Port}
+	}
+	return defaultServePorts
+}
+
+func listenServe(cfg appConfig, listen func(network, address string) (net.Listener, error)) (net.Listener, int, error) {
+	return listenFirst(cfg.Host, candidatePorts(cfg), listen)
+}
+
+// listenFirst binds the first free port in ports directly (no pre-check race).
+// Only EADDRINUSE advances to a fallback port; if every candidate is in use and
+// fallback was enabled, the error names all tried ports and -port.
+func listenFirst(host string, ports []int, listen func(network, address string) (net.Listener, error)) (net.Listener, int, error) {
+	netw := listenNetwork(host)
+	for i, port := range ports {
+		addr := net.JoinHostPort(host, strconv.Itoa(port))
+		ln, err := listen(netw, addr)
+		if err == nil {
+			return ln, port, nil
+		}
+		if !errors.Is(err, syscall.EADDRINUSE) || i == len(ports)-1 {
+			if len(ports) > 1 && errors.Is(err, syscall.EADDRINUSE) {
+				parts := make([]string, len(ports))
+				for j, p := range ports {
+					parts[j] = strconv.Itoa(p)
+				}
+				return nil, 0, fmt.Errorf("ports %s on %s are in use; pass -port (or set AGYD_PORT) to choose another port: %w",
+					strings.Join(parts, " and "), host, err)
+			}
+			return nil, 0, fmt.Errorf("listening on %s: %w", addr, err)
+		}
+	}
+	return nil, 0, errors.New("no listen ports configured")
 }
