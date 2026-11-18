@@ -7,12 +7,16 @@
 
 ## Now
 
-Phase 2 — `agyd` host binary with Swagger docs, Docker removed (`PLAN-2026-11-16-1821-plan-agyd-host-binary-with-swagger-docs-and-web`, `ADR-002`).
+Phase 3 — HTTP API (`PLAN-model-selection`, D2/D5/D7, D10-D21): freeze `openapi.json`, `/v1/conversations` + `/v1/current` + `/v1/defaults` + `/v1/models`, `Agyd-*` headers, handlers on `conversation.Manager`.
 
-- [x] P1: `cmd/agyd`, loopback-only config, `api.Guard`, `api.Routes`, status `workspace`, Docker removal, tests
-- [x] P2: `internal/web` (`openapi.json`, vendored Swagger UI 5.35.0, `/` redirect), tests
-- [x] P3: docs and records, reviewer + security + verifier, commit
+- [x] Phase 0: ACP method check (live probe) and cold-read fold-in
+- [x] Phase 1: config layering and defaults
+- [x] Phase 2: ACP plus current conversation
+- [ ] Phase 3: HTTP API
 
 ## Next
+
+- Phase 4 — CLI client (`agyd ask|new|list|use|current|model|models|defaults`, `--json`).
+- Phase 5 — docs, ADR-005, GUIDE-testing/DEPLOY-local updates, reviewer + security, live smoke.
 
 ## Backlog
