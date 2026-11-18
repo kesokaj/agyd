@@ -112,8 +112,24 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 }
 
 func main() {
+	cmd, args, err := dispatch(os.Args[1:])
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "agyd:", err)
+		os.Exit(2)
+	}
+	if cmd != "serve" {
+		ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+		code := runClient(ctx, cmd, args, osCLIEnv())
+		stop()
+		os.Exit(code)
+	}
+	serve(args)
+}
+
+// serve runs the server: bare `agyd`, `agyd serve` or `agyd -flag ...`.
+func serve(args []string) {
 	log := newLogger(os.Stdout)
-	cfg, err := loadServeConfig(log, os.Args[1:])
+	cfg, err := loadServeConfig(log, args)
 	if ue, ok := errors.AsType[*usageError](err); ok {
 		fmt.Print(ue.text)
 		return

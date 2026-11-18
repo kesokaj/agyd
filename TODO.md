@@ -7,16 +7,17 @@
 
 ## Now
 
-Phase 4 — CLI client (`PLAN-model-selection`, D8/D18): `agyd ask|new|list|use|current|model|models|defaults` against the Phase 3 API, `--json`, the info line, serve vs client dispatch.
+Phase 5 — docs, ADR-005, records, review, live smoke (`PLAN-model-selection`): README/SDD/TDD for `/v1/conversations` and the CLI, ADR-005, GUIDE-testing/DEPLOY-local, whole-diff reviewer + security, live smoke.
 
 - [x] Phase 0: ACP method check (live probe) and cold-read fold-in
 - [x] Phase 1: config layering and defaults
 - [x] Phase 2: ACP plus current conversation
 - [x] Phase 3: HTTP API
-- [ ] Phase 4: CLI client
+- [x] Phase 4: CLI client
+- [ ] Phase 5: docs, ADR-005, records, review, live smoke
 
 ## Next
 
-- Phase 5 — docs, ADR-005, GUIDE-testing/DEPLOY-local updates, reviewer + security, live smoke.
+- none (PLAN-model-selection ends with Phase 5).
 
 ## Backlog
