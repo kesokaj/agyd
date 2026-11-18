@@ -3,7 +3,6 @@
 .env.*
 *.pem
 *.key
-/agy-api
 /agyd
 /bin/
 dist/
