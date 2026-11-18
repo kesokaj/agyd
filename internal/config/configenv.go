@@ -12,7 +12,7 @@ import (
 )
 
 // WriteConfigEnv merges updates into the config.env at path. Only the
-// DotEnvKeys settings may be written and every value must pass
+// SettingKeys may be written and every value must pass
 // ValidSettingValue; both are checked before the file is touched. Other
 // lines are kept verbatim. The write is atomic (temp file in the same
 // directory, then rename); a new directory is 0700 and the file is 0600.
@@ -21,8 +21,8 @@ func WriteConfigEnv(path string, updates map[string]string) error {
 		return errors.New("config.env: nothing to write")
 	}
 	for k, v := range updates {
-		if !slices.Contains(DotEnvKeys, k) {
-			return fmt.Errorf("config.env: key %q may not be written (allowed: %s)", k, strings.Join(DotEnvKeys, ", "))
+		if !slices.Contains(SettingKeys, k) {
+			return fmt.Errorf("config.env: key %q may not be written (allowed: %s)", k, strings.Join(SettingKeys, ", "))
 		}
 		if !ValidSettingValue(v) {
 			return fmt.Errorf("config.env: invalid value for %s (want 1-64 of [A-Za-z0-9._-])", k)
@@ -57,7 +57,7 @@ func mergeEnv(old []byte, updates map[string]string) []byte {
 			out.WriteString(line + "\n")
 		}
 	}
-	for _, k := range DotEnvKeys {
+	for _, k := range SettingKeys {
 		if v, upd := updates[k]; upd && !written[k] {
 			fmt.Fprintf(&out, "%s=%s\n", k, v)
 		}

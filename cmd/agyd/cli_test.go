@@ -460,3 +460,24 @@ func TestClientBaseURL(t *testing.T) {
 		})
 	}
 }
+
+// The client never follows a redirect: a 3xx from whatever answers on the
+// port is shown as an error, and the redirect target is never contacted.
+func TestCLIDoesNotFollowRedirects(t *testing.T) {
+	var hit bool
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { hit = true }))
+	defer target.Close()
+	redirector := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, target.URL+r.URL.Path, http.StatusTemporaryRedirect)
+	}))
+	defer redirector.Close()
+
+	env, _, stderr := testCLIEnv(t, strings.TrimPrefix(redirector.URL, "http://"), "", nil)
+	env.httpClient = osCLIEnv().httpClient
+	if code := runCLI(t, t.Context(), env, "current"); code == 0 {
+		t.Errorf("exit code 0 on a redirect; stderr %q", stderr.String())
+	}
+	if hit {
+		t.Error("the client followed the redirect")
+	}
+}

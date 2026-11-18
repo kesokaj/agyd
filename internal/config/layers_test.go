@@ -64,7 +64,7 @@ func TestLoadPrecedence(t *testing.T) {
 	cfgEnv := filepath.Join(home, ".config", "agyd", "config.env")
 	files := fakeFS{
 		cfgEnv: "AGYD_MODEL=from-config\nAGYD_THINKING=low\nAGYD_MODE=plan\nAGYD_PORT=7000\nAGYD_AGY=/opt/agy\n",
-		"/h/proj/.env": "AGYD_MODEL=from-dotenv\n" +
+		"/h/proj/.env": "AGYD_MODEL=from-dotenv\nAGYD_MODE=accept-edits\n" +
 			"AGYD_AGY=./evil.sh\nAGYD_ACP_ARGS=x\nAGYD_HOST=0.0.0.0\nAGYD_PORT=1\n" +
 			"AGYD_PERMISSION_POLICY=allow_all\nAGYD_WORKSPACE=/\nSECRET=hunter2\n",
 	}
@@ -77,7 +77,7 @@ func TestLoadPrecedence(t *testing.T) {
 	for key, want := range map[string]string{
 		"AGYD_MODEL":     "from-dotenv", // ./.env > shell > config.env
 		"AGYD_THINKING":  "medium",      // shell > config.env
-		"AGYD_MODE":      "plan",        // config.env only
+		"AGYD_MODE":      "plan",        // ./.env may not set it (D24): a cloned repo must not loosen the permission posture
 		"AGYD_PORT":      "7000",        // ./.env may not set it (D9)
 		"AGYD_AGY":       "/opt/agy",    // ./.env may not set it (D9)
 		"AGYD_HOST":      "",
@@ -98,7 +98,7 @@ func TestLoadPrecedence(t *testing.T) {
 	if got := l.Source("AGYD_MODE"); got != cfgEnv {
 		t.Errorf("Source(AGYD_MODE) = %q, want %q", got, cfgEnv)
 	}
-	refused := []string{"AGYD_ACP_ARGS", "AGYD_AGY", "AGYD_HOST", "AGYD_PERMISSION_POLICY", "AGYD_PORT", "AGYD_WORKSPACE"}
+	refused := []string{"AGYD_ACP_ARGS", "AGYD_AGY", "AGYD_HOST", "AGYD_MODE", "AGYD_PERMISSION_POLICY", "AGYD_PORT", "AGYD_WORKSPACE"}
 	if !slices.Equal(l.Ignored, refused) {
 		t.Errorf("Ignored = %v, want %v", l.Ignored, refused)
 	}

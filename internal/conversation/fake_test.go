@@ -24,6 +24,10 @@ type fakeAgent struct {
 	listErr   error
 	seq       int
 	closeErrs map[string]error
+	// afterGet, when set, runs once after the next GetSession returns, outside
+	// the lock: a concurrent change landing between a caller's read and its
+	// next step.
+	afterGet func(id string)
 }
 
 var fakeChoices = map[string][]string{
@@ -73,12 +77,38 @@ func (f *fakeAgent) NewSession(_ context.Context, cwd string) (acp.SessionInfo, 
 
 func (f *fakeAgent) GetSession(id string) (acp.SessionInfo, error) {
 	f.mu.Lock()
-	defer f.mu.Unlock()
 	info, ok := f.live[id]
+	hook := f.afterGet
+	f.afterGet = nil
+	f.mu.Unlock()
+	if hook != nil {
+		defer hook(id)
+	}
 	if !ok {
 		return acp.SessionInfo{}, acp.ErrSessionNotFound
 	}
 	return info, nil
+}
+
+// setLive changes a live conversation's setting as another client would.
+func (f *fakeAgent) setLive(id, configID, value string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	info := f.live[id]
+	opts := slices.Clone(info.ConfigOptions)
+	for i := range opts {
+		if opts[i].ID == configID {
+			opts[i].CurrentValue = value
+		}
+	}
+	info.ConfigOptions = opts
+	f.live[id] = info
+}
+
+func (f *fakeAgent) liveSetting(id, configID string) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.live[id].Setting(configID)
 }
 
 func (f *fakeAgent) ListSessions() []acp.SessionInfo {

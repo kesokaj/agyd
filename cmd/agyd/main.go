@@ -153,7 +153,7 @@ func loadServeConfig(log *slog.Logger, args []string) (appConfig, error) {
 	if err != nil {
 		return appConfig{}, fmt.Errorf("getting current directory: %w", err)
 	}
-	layers, err := config.Load(cwd, os.Getenv, os.ReadFile)
+	layers, err := config.Load(cwd, os.Getenv, config.ReadEnvFile)
 	if err != nil {
 		return appConfig{}, err
 	}

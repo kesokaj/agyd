@@ -1,115 +1,134 @@
-# SDD — agy-api
+# SDD — agyd
 
-A single-binary Go HTTP/SSE gateway (`cmd/agyd`) translates REST calls into Agent Client Protocol (ACP v1) JSON-RPC 2.0 messages over stdio to a warm `agy acp` subprocess on the host and serves embedded Swagger UI documentation.
-Status: agreed · Last updated: 2026-11-16 · Requirements: [PRD.md](PRD.md) · Technical design: [TDD.md](TDD.md)
+A single Go binary (`cmd/agyd`) serves a REST/SSE API that translates calls into Agent Client Protocol (ACP v1) JSON-RPC 2.0 messages over stdio to a warm `agy acp` subprocess, keeps one current conversation with model/thinking defaults, serves embedded Swagger UI, and doubles as a terminal client (`agyd ask|new|list|use|...`) of a running server.
+Status: agreed · Last updated: 2026-11-18 · Requirements: [PRD.md](PRD.md) · Technical design: [TDD.md](TDD.md)
 
 ## Context
 
-`agyd` runs directly on the operator's machine, listening on `127.0.0.1:8080`. It supervises the host's installed `agy` CLI in `acp` mode, inheriting the operator's existing `~/.gemini` login without credentials in transit or containers.
+`agyd` runs directly on the operator's machine, listening on `127.0.0.1:8080`. It supervises the host's installed `agy` CLI in `acp` mode, inheriting the operator's existing `~/.gemini` login without credentials in transit or containers. Its own state is two small files in the operator's config dir (`config.env`, `state.json`).
 
 ```mermaid
 flowchart LR
-  Caller["Local HTTP Caller / Browser"] -->|"REST + SSE"| Guard["api.Guard\nHost Check + CSRF"]
-  Guard --> M1["M1: cmd/agyd\nMux Composition"]
+  CLI["agyd ask / new / use ...\n(M7 client)"] -->|"HTTP + SSE"| Guard
+  Caller["curl / Browser"] -->|"REST + SSE"| Guard["api.Guard\nHost Check + CSRF"]
+  Guard --> M1["M1: cmd/agyd\nServe + Mux"]
   M1 --> M4["M4: internal/web\nSwagger UI + openapi.json"]
-  M1 --> M3["M3: internal/api\nREST & SSE Endpoints"]
-  M3 --> M2["M2: internal/acp\nJSON-RPC 2.0 Stdio Client"]
+  M1 --> M3["M3: internal/api\nREST and SSE Endpoints"]
+  M3 --> M6["M6: internal/conversation\nCurrent pointer + settings"]
+  M6 --> M2["M2: internal/acp\nJSON-RPC 2.0 Stdio Client"]
+  M6 --> M5["M5: internal/config\nconfig.env + state.json"]
   M2 -->|"ACP v1 NDJSON-RPC\nstdin / stdout"| Agy["Host agy acp\n(reusing ~/.gemini login)"]
   Agy -.->|"Read / Write / Shell"| Workspace["Workspace Directory\n(cwd)"]
 ```
 
 ## Components
 
-Every package has one responsibility in the HTTP-to-ACP and documentation pipeline.
+Every package has one responsibility.
 
 | ID | Component | Responsibility | Satisfies |
 |---|---|---|---|
-| M1 | `cmd/agyd` | Binary entry point, flag/env parsing (`-host`/`-port`, loopback default), Host allowlist for a non-loopback bind, mux composition (`internal/web` + `internal/api` wrapped in `api.Guard`), `log/slog` setup, and graceful `SIGINT`/`SIGTERM` shutdown | — |
-| M2 | `internal/acp` | ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, `session/update` fan-out, and `session/request_permission` policy | — |
-| M3 | `internal/api` | REST and SSE HTTP handlers, route table (`api.Routes`), Host header validation and `http.CrossOriginProtection` (`api.Guard`), and AIP-193 JSON error formatting | — |
-| M4 | `internal/web` | Embedded OpenAPI 3.1 specification (`openapi.json`), vendored Swagger UI assets (`docs.html`, `docs.js`), root redirect (`GET /{$}` -> `/docs`), and CSP/nosniff security headers | — |
+| M1 | `cmd/agyd` (serve) | Entry point and first-word dispatch (serve vs client), layered flag/env config (`serveconfig.go`), Host allowlist for a non-loopback bind, startup conversation and model picker (`startup.go`, `picker.go`), mux composition wrapped in `api.Guard`, `log/slog`, graceful `SIGINT`/`SIGTERM` shutdown | — |
+| M2 | `internal/acp` | ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, `session/set_config_option`, `session/list`, `session/resume`, `session/update` fan-out, `session/request_permission` policy | — |
+| M3 | `internal/api` | REST and SSE handlers on the Manager, route table, `Agyd-*` response headers, Host validation and `http.CrossOriginProtection` (`api.Guard`), AIP-193 errors | — |
+| M4 | `internal/web` | Embedded OpenAPI 3.1 spec (`openapi.json`), vendored Swagger UI, root redirect, CSP/nosniff headers | — |
+| M5 | `internal/config` | `AGYD_*` env-file parser, layering (flags > `./.env` allowlist > shell > `config.env`), atomic `config.env` merge-writer, per-port `state.json` store | — |
+| M6 | `internal/conversation` | `Manager`: the one owner of the current pointer, defaults, per-conversation settings and `state.json` saves; resolve-or-create, use/resume, list merge with agy history | — |
+| M7 | `cmd/agyd` (client) | `agyd ask|new|list|use|current|model|models|defaults`: stdlib HTTP client of a running agyd, base URL from `--host`/`--port` > shell > `config.env`, stderr info line, `--json` | — |
 
 ## Route table
 
-All HTTP routes are exposed through the outer mux wrapped in `api.Guard`:
+All HTTP routes are exposed through the outer mux wrapped in `api.Guard` (ADR-005 renamed `/v1/sessions` to `/v1/conversations`):
 
 | Method & Path | Package | Purpose |
 |---|---|---|
 | `GET /{$}` | `internal/web` | 302 redirect to `/docs` |
-| `GET /docs` | `internal/web` | Vendored Swagger UI page (`docs.html`) |
-| `GET /openapi.json` | `internal/web` | Hand-written OpenAPI 3.1 specification |
-| `GET /static/*` | `internal/web` | Embedded static Swagger UI assets |
-| `GET /healthz` | `internal/api` | Liveness check returning `204 No Content` |
-| `GET /v1/status` | `internal/api` | Gateway and ACP child readiness, backend info, permission policy, and default `workspace` |
-| `POST /v1/sessions` | `internal/api` | Creates a new ACP session via `session/new` |
-| `GET /v1/sessions` | `internal/api` | Lists tracked in-memory sessions |
-| `GET /v1/sessions/{sessionId}` | `internal/api` | Retrieves metadata for a single session |
-| `POST /v1/sessions/{sessionId}/prompt` | `internal/api` | Executes prompt turn over `session/prompt` (SSE or buffered JSON) |
-| `POST /v1/sessions/{sessionId}/cancel` | `internal/api` | Sends `session/cancel` notification for active prompt |
-| `DELETE /v1/sessions/{sessionId}` | `internal/api` | Closes session via `session/close` and unregisters it |
+| `GET /docs`, `GET /openapi.json`, `GET /static/*` | `internal/web` | Swagger UI, spec and assets |
+| `GET /healthz` | `internal/api` | Liveness: `204` |
+| `GET /v1/status` | `internal/api` | ACP child readiness, backend info, permission policy, default `workspace` |
+| `GET`, `PATCH /v1/current` | `internal/api` | Current conversation; change its settings |
+| `POST /v1/prompt`, `POST /v1/cancel` | `internal/api` | Turn on the current conversation (auto-creates one); cancel it |
+| `POST`, `GET /v1/conversations` | `internal/api` | Create (becomes current unless `use:false`); list live plus agy history |
+| `GET`, `PATCH`, `DELETE /v1/conversations/{conversationId}` | `internal/api` | One conversation; change settings; close |
+| `POST /v1/conversations/{conversationId}/prompt`, `/cancel`, `/use` | `internal/api` | Turn, cancel, make current (resumes if not live) |
+| `GET /v1/models` | `internal/api` | Models, thinking levels, modes from the latest configOptions |
+| `GET`, `PUT /v1/defaults` | `internal/api` | Defaults for new conversations; PUT persists to `config.env` |
 
-`api.Routes` is an exported slice of `Route{Method, Pattern, Handler}` registered by `internal/api`. A unit test asserts that `api.Routes` matches the path-method matrix in `internal/web/static/openapi.json`.
+`api.Routes()` returns the registered operations; a unit test asserts they match the path-method matrix in `internal/web/static/openapi.json`.
 
 ## Flows
 
-### Prompt turn over SSE
-
-A caller creates a session via `POST /v1/sessions` and streams a prompt turn via `POST /v1/sessions/{id}/prompt` (`Accept: text/event-stream`).
+### Startup
 
 ```mermaid
 sequenceDiagram
-  participant C as Caller / Browser
-  participant G as api.Guard
-  participant API as M3: internal/api
-  participant ACP as M2: internal/acp
-  participant CLI as Host agy acp (stdio)
-  C->>G: POST /v1/sessions {"cwd":"/path/to/work"}
-  G->>API: Allow (Host + CSRF pass)
-  API->>ACP: NewSession(ctx, "/path/to/work")
-  ACP->>CLI: {"method":"session/new","params":{"cwd":"/path/to/work","mcpServers":[]}}
-  CLI-->>ACP: {"result":{"sessionId":"sess_1",...}}
-  ACP-->>API: SessionInfo{SessionID:"sess_1"}
-  API-->>C: 201 Created {"sessionId":"sess_1",...}
-  C->>G: POST /v1/sessions/sess_1/prompt (Accept: text/event-stream)
-  G->>API: Allow (Host + CSRF pass)
-  API->>ACP: Prompt(ctx, "sess_1", blocks, onUpdate)
-  ACP->>CLI: {"method":"session/prompt","params":{"sessionId":"sess_1","prompt":[...]}}
-  CLI-->>ACP: {"method":"session/update","params":{...}}
-  ACP-->>API: onUpdate(notification)
-  API-->>C: event: session_update\ndata: {...}
-  CLI-->>ACP: {"result":{"stopReason":"end_turn"}}
-  ACP-->>API: PromptResult{StopReason:"end_turn"}
-  API-->>C: event: prompt_done\ndata: {"sessionId":"sess_1","stopReason":"end_turn"}
+  participant M as M1 serve
+  participant C as M5 config
+  participant G as M6 Manager
+  participant A as M2 acp
+  M->>C: Load layers (flags > ./.env allowlist > env > config.env)
+  M->>G: Startup (60 s)
+  G->>C: state.json[port]
+  alt saved conversation
+    G->>A: session/resume, then re-apply its settings
+  else none or resume failed (warn)
+    G->>A: session/new, then apply defaults (lenient)
+  end
+  opt TTY and no layer sets a model
+    M->>M: picker: model, thinking, save to config.env?
+  end
+  M->>M: listen on host:port
 ```
+
+### `agyd ask` on the current conversation
+
+```mermaid
+sequenceDiagram
+  participant U as agyd ask (M7)
+  participant API as M3 api (behind Guard)
+  participant G as M6 Manager
+  participant A as M2 acp
+  participant X as agy acp
+  U->>API: POST /v1/prompt (Accept: text/event-stream)
+  API->>G: Resolve("") once (create if empty, resume if not live)
+  G-->>API: conversation id + settings
+  API->>A: Prompt(id, blocks, onUpdate)
+  A->>X: session/prompt
+  X-->>A: session/update ...
+  API-->>U: Agyd-* headers, event: session_update ...
+  X-->>A: result {stopReason}
+  API-->>U: event: prompt_done
+  U->>U: info line on stderr, text on stdout
+```
+
+A model change (`PATCH /v1/current`, `agyd model`) marks the conversation busy, sends `session/set_config_option` per changed field, and replaces the stored configOptions with agy's reply; a turn in flight makes it `409 PROMPT_IN_FLIGHT`.
 
 ## Decisions
 
 Architectural choices link to their ADR records (`fyr record get ADR-NNN`).
 
-- Ship `agyd` as a single host binary wrapping installed `agy` CLI over stdio ACP, dropping Docker and container sandboxing in favor of loopback binding, Host header guard, and CSRF protection (`http.CrossOriginProtection`), reusing host `~/.gemini` login without in-app token or credentials — `ADR-002` (supersedes `ADR-001`'s Docker runtime).
-- Default to loopback but allow `-host 0.0.0.0` as an explicit, warned opt-in, with the Host guard extended to the machine's own IPs and hostname — rejected: `0.0.0.0` by default (unauthenticated agent control for anyone on the network) — `ADR-004` (amends `ADR-002`'s loopback-only bind).
-- Use `agy acp` (ACP v1 over stdio) rather than headless `agy -p --input-format stream-json` so one warm process handles multi-turn sessions and the backend binary can be swapped for `claude-agent-acp` — rejected: `agy -p` per-turn subprocess wrapper — `ADR-001`.
+- Ship `agyd` as a single host binary wrapping installed `agy` CLI over stdio ACP, protected by loopback binding, Host header guard and CSRF protection, reusing the host `~/.gemini` login — `ADR-002` (supersedes `ADR-001`'s Docker runtime).
+- Scope to `agy-cli` only; other ACP backends deferred — `ADR-003`.
+- Default to loopback but allow `-host 0.0.0.0` as an explicit, warned opt-in, with the Host guard extended to the machine's own IPs and hostname — `ADR-004` (amends `ADR-002`).
+- Rename `/v1/sessions` to `/v1/conversations` (no alias), add one current conversation with model/thinking/mode settings and saved defaults, layered config with a `./.env` allowlist, `session/resume`-only restarts, and the `agyd` CLI client in the same binary — rejected: a `/v1/sessions` alias, `session/load`, unrestricted `./.env`, a separate client binary — `ADR-005`.
 
 ## Cross-cutting
 
-Security, privacy, observability, and cost policies apply across all components.
-
-- **Security:** Binds to loopback by default (`-host 127.0.0.1`). `-host 0.0.0.0` (or another IP) is an explicit opt-in, listening on that address family only (`tcp4`/`tcp6`, so `0.0.0.0` never also exposes IPv6), that logs a startup warning (`ADR-004`). `api.Guard` enforces Host header matching: loopback names always, plus the machine's own interface IPs and hostname when bound beyond loopback; anything else gets `403 FORBIDDEN_HOST`. Standard library `http.CrossOriginProtection` guards against CSRF. No in-app API token is used. Tool execution is auto-approved under `allow_all` default (or rejected under `deny_all`).
-- **Privacy:** Request bodies, prompts, and credentials are never logged.
-- **Observability:** Structured JSON logs on `stdout` via `log/slog` (`severity`, `message`, `timestamp`, `url`); `GET /healthz` and `GET /v1/status` report gateway and ACP child readiness.
-- **Cost:** Local host binary only; zero cloud infrastructure cost.
+- **Security:** Loopback by default; `-host 0.0.0.0` is a warned opt-in (`ADR-004`). `api.Guard` enforces Host matching (`403 FORBIDDEN_HOST`) and `http.CrossOriginProtection`. No API token. Tool calls follow `allow_all` (default) or `deny_all`, which only answers the permission requests agy sends (not a sandbox, `ADR-005`). A project `./.env` may set only `AGYD_MODEL` and `AGYD_THINKING` (not `AGYD_MODE`, D24), is opened non-blocking and read only as a regular file of at most 1 MiB, and nothing from it reaches agy's environment. `PUT /v1/defaults` writes only a fixed `config.env` path, three keys, values matching `^[A-Za-z0-9._-]{1,64}$`, atomically (0600 file, 0700 dir), serialized per process (two agyd instances writing at the same moment can still drop a key; known limit). The CLI never reads `./.env` and never follows redirects.
+- **Privacy:** Request bodies, prompts and credentials are never logged. `GET /v1/conversations` exposes agy's conversation titles to any caller that passes the guard (`ADR-005`).
+- **Observability:** Structured JSON logs via `log/slog` (`severity`, `message`, `timestamp`); `Agyd-Conversation`, `Agyd-Model`, `Agyd-Thinking-Level`, `Agyd-Mode` headers on every `/healthz` and `/v1/*` response; `GET /healthz` and `GET /v1/status` report readiness.
+- **Cost:** Local host binary only; zero cloud cost.
 
 ## Deployment
 
-Runs locally on the host machine (`go build -o bin/ ./cmd/agyd`, then run `bin/agyd`; or `go run ./cmd/agyd`); see `DEPLOY-local` (`fyr record get DEPLOY-local`).
+Runs locally on the host machine (`go build -o bin/ ./cmd/agyd`, then `bin/agyd`); see `DEPLOY-local` (`fyr record get DEPLOY-local`).
 
 ## Risks
 
-Key technical risks and the checks that detect them early:
-
-- `agy` CLI not found on host `$PATH` — detected at startup via `exec.LookPath`, causing `agyd` to exit `1` with message `agy not found on PATH; install agy-cli or pass -agy /path/to/agy`.
-- `agy acp` child process crashes or exits mid-turn — detected by the stdio reader loop closing pending RPC calls with a structured error, clearing in-memory session registry, and lazily restarting on next request.
-- OAuth session expires in host `~/.gemini` — detected when `session/prompt` returns an ACP authentication error mapped to HTTP `401 UNAUTHENTICATED`, remediated by running `agy` interactively once on the host.
+- `agy` not on `$PATH` — detected at startup via `exec.LookPath`; `agyd` exits `1` with `agy not found on PATH; install agy-cli or pass -agy /path/to/agy`.
+- `agy acp` exits mid-turn — the stdio reader fails pending calls, clears the registry, and restarts lazily; the next request on the current pointer resumes it.
+- OAuth expiry in `~/.gemini` — ACP auth errors map to `401 ACP_AUTH_REQUIRED`; run `agy` interactively once.
+- agy drops a conversation from its history — startup resume fails and agyd creates a fresh conversation with a warning.
+- The current pointer is global — every client (and the LAN on a `0.0.0.0` bind) shares it; responses name the conversation used and scripts can address IDs explicitly.
 
 ## Trace
 
@@ -117,4 +136,4 @@ Requirement-to-component mapping stays `—` until `PRD.md` requirements are app
 
 | Requirement | Components |
 |---|---|
-| — | M1, M2, M3, M4 |
+| — | M1, M2, M3, M4, M5, M6, M7 |

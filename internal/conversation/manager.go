@@ -58,6 +58,8 @@ type Manager struct {
 
 	opMu sync.Mutex // serializes pointer and settings changes (create, use, resume, update, delete)
 
+	defaultsMu sync.Mutex // serializes SetDefaults, so config.env's read-merge-write loses no key
+
 	mu       sync.Mutex // guards the fields below
 	current  string
 	defaults Settings
@@ -261,6 +263,11 @@ func (m *Manager) Update(ctx context.Context, id string, s Settings) (acp.Sessio
 	}
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
+	// Re-read under opMu: a change that landed since the first read must not
+	// be skipped as "already set".
+	if info, err = m.agent.GetSession(info.SessionID); err != nil {
+		return acp.SessionInfo{}, err
+	}
 	info, err = m.applyStrict(ctx, info, s)
 	if err != nil {
 		return acp.SessionInfo{}, err
@@ -273,12 +280,16 @@ func (m *Manager) Update(ctx context.Context, id string, s Settings) (acp.Sessio
 }
 
 // Delete closes a live conversation. Deleting the current one clears the
-// pointer; the next prompt creates a new conversation.
+// pointer; the next prompt creates a new conversation. The current one is
+// cleared even when agy no longer has it live (after an agy restart), so the
+// pointer never dangles.
 func (m *Manager) Delete(ctx context.Context, id string) error {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
 	if err := m.agent.CloseSession(ctx, id); err != nil {
-		return err
+		if !errors.Is(err, acp.ErrSessionNotFound) || id == "" || m.CurrentID() != id {
+			return err
+		}
 	}
 	m.mu.Lock()
 	delete(m.memos, id)

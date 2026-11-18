@@ -10,10 +10,15 @@ import (
 	"strings"
 )
 
-// DotEnvKeys are the only keys a project's ./.env may set (D9). Anything
+// DotEnvKeys are the only keys a project's ./.env may set (D9, D24). Anything
 // else there (the agy binary, its args, bind address, permission policy,
-// workspace) could redirect what agyd executes or exposes, so it is ignored.
-var DotEnvKeys = []string{"AGYD_MODEL", "AGYD_THINKING", "AGYD_MODE"}
+// workspace, the agent mode) could redirect what agyd executes or exposes, or
+// loosen its permission posture, so it is ignored.
+var DotEnvKeys = []string{"AGYD_MODEL", "AGYD_THINKING"}
+
+// SettingKeys are the conversation defaults agyd itself writes to config.env
+// (the startup picker, PUT /v1/defaults), in file order.
+var SettingKeys = []string{"AGYD_MODEL", "AGYD_THINKING", "AGYD_MODE"}
 
 // SourceEnv is what Source reports for a value taken from the shell.
 const SourceEnv = "env"

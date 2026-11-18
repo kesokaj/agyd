@@ -87,6 +87,8 @@ func (m *Manager) SetDefaults(s Settings, persist bool) (Settings, error) {
 	if err := s.validate(); err != nil {
 		return Settings{}, err
 	}
+	m.defaultsMu.Lock()
+	defer m.defaultsMu.Unlock()
 	if err := m.checkKnown(s); err != nil {
 		return Settings{}, err
 	}

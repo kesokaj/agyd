@@ -71,6 +71,16 @@ func TestParseEnv(t *testing.T) {
 			t.Fatalf("got %v, %v; want AGYD_MODEL=b", got, err)
 		}
 	})
+
+	// A long comment or unrelated line (a certificate, a JWT) must not stop
+	// startup: bufio.Scanner's default 64 KiB token limit is raised.
+	t.Run("lines over 64 KiB are read", func(t *testing.T) {
+		in := "# " + strings.Repeat("x", 100<<10) + "\nOTHER=" + strings.Repeat("y", 100<<10) + "\nAGYD_MODEL=m\n"
+		got, err := ParseEnv(strings.NewReader(in), ".env")
+		if err != nil || got["AGYD_MODEL"] != "m" {
+			t.Fatalf("got %v, %v; want AGYD_MODEL=m", got, err)
+		}
+	})
 }
 
 func TestValidSettingValue(t *testing.T) {

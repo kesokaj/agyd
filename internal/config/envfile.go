@@ -31,6 +31,7 @@ func ValidSettingValue(v string) bool { return settingValue.MatchString(v) }
 func ParseEnv(r io.Reader, name string) (map[string]string, error) {
 	out := map[string]string{}
 	sc := bufio.NewScanner(r)
+	sc.Buffer(make([]byte, 0, 64<<10), MaxEnvFileSize)
 	for n := 1; sc.Scan(); n++ {
 		key, val, ours, err := parseLine(sc.Text())
 		if err != nil {

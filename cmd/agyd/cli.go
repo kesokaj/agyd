@@ -33,8 +33,12 @@ type cliEnv struct {
 func osCLIEnv() cliEnv {
 	return cliEnv{
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
-		getenv: os.Getenv, getwd: os.Getwd, readFile: os.ReadFile,
-		httpClient: &http.Client{}, // no timeout: ask streams; Ctrl-C cancels the context
+		getenv: os.Getenv, getwd: os.Getwd, readFile: config.ReadEnvFile,
+		httpClient: &http.Client{ // no timeout: ask streams; Ctrl-C cancels the context
+			// agyd never redirects; whatever else answers on the port must not
+			// steer a prompt to another host.
+			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+		},
 	}
 }
 

@@ -78,8 +78,8 @@ const usageHeader = `agyd: HTTP + SSE API and Swagger docs in front of agy.
 Usage: agyd [serve] [flags]
        agyd <command> [flags]   client of a running agyd (agyd help lists commands)
 
-Settings, highest first: flags > ./.env (AGYD_MODEL, AGYD_THINKING and
-AGYD_MODE only) > shell env > ~/.config/agyd/config.env.
+Settings, highest first: flags > ./.env (AGYD_MODEL and AGYD_THINKING
+only) > shell env > ~/.config/agyd/config.env.
 
 Flags:
 `

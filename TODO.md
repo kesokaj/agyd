@@ -7,17 +7,22 @@
 
 ## Now
 
-Phase 5 — docs, ADR-005, records, review, live smoke (`PLAN-model-selection`): README/SDD/TDD for `/v1/conversations` and the CLI, ADR-005, GUIDE-testing/DEPLOY-local, whole-diff reviewer + security, live smoke.
-
-- [x] Phase 0: ACP method check (live probe) and cold-read fold-in
-- [x] Phase 1: config layering and defaults
-- [x] Phase 2: ACP plus current conversation
-- [x] Phase 3: HTTP API
-- [x] Phase 4: CLI client
-- [ ] Phase 5: docs, ADR-005, records, review, live smoke
+No active phase. `PLAN-model-selection` is complete (Phase 5 closed 2026-11-18, ADR-005).
 
 ## Next
 
-- none (PLAN-model-selection ends with Phase 5).
+- Permission visibility: log every permission decision and find out why agy writes under `deny_all` without asking (ADR-005 known limit).
+- Persist the creation cwd of agyd-created conversations (agy `session/list` reports the git root).
+- CLI output hardening: strip terminal control characters from server and agent text.
 
 ## Backlog
+
+- 2026-11-18 (security r1 #7) `GET /v1/current` resumes a non-live conversation; consider a side-effect-free read.
+- 2026-11-18 (reviewer r1 #4) `Manager.Resolve` falls back to a fresh conversation only on `ErrSessionNotFound`.
+- 2026-11-18 (reviewer r1 #5) openapi.json: declare 400/401 on `use`, `current` and the PATCH routes.
+- 2026-11-18 (reviewer r1) `-32602` from agy is always labelled `INVALID_SETTING`.
+- 2026-11-18 (reviewer r1 #7) store agy `config_option_update`/`current_mode_update` notifications.
+- 2026-11-18 (reviewer r1 #8) fill `SessionInfo.Title` for live conversations.
+- 2026-11-18 (security r2 #2) skip malformed lines for ignored keys in `./.env` instead of failing startup; lines over 1 MiB still fail.
+- 2026-11-18 (security r2 #3) warn when a refused `./.env` is skipped; owner check on the walk outside `$HOME` (it goes up to `/`).
+- 2026-11-18 (reviewer r2 #1) cross-process lock (flock) on `config.env` writes.
