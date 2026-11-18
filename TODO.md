@@ -7,8 +7,16 @@
 
 ## Now
 
-`PLAN-folder-isolation` (approved 2026-11-18, MVP). Phase 0: cleanup done; next the spikes S1 (`agy acp --process-per-session`), S3 (two models at once), S4 (`/clear`), then ADR-006.
-Phases: P1 flags+env and one state file (not keyed by port) - P2 no symlinks - P3 port 8080 then 3000 - P4 per-folder isolation - P5 `/clear` - P6 405 on web routes.
+`PLAN-folder-isolation` (`ADR-006`; Phase 0 complete). Active: **Phase 1: flags and env only, one state file** — replace `./.env` and `config.env` with flags + `AGYD_*` env and one port-independent `state.json`.
+
+- [ ] Remove the `./.env` walk and `config.env` (`internal/config/layers.go`). Settings come from flags, falling back to `AGYD_*` env, then built-in defaults.
+- [ ] `state.json` is no longer keyed by port. It holds: the current conversation, the defaults (`PUT /v1/defaults` saves here instead of `config.env`), and per conversation its folder and settings.
+- [ ] `AGYD_STATE_DIR` sets the folder.
+- [ ] Atomic write: temp file + rename, mode 0600.
+- [ ] Restart test (unit and live): set defaults, create two conversations, `use` one, send SIGTERM, start again. The same current conversation, defaults and folders come back, and the next prompt continues the same conversation.
+- [ ] Checkpoint: change record, commit and push, handoff.
+
+Remaining phases: P2 no symlinks - P3 port 8080 then 3000 - P4b per-folder `agy acp` process (`cmd.Dir = folder`) - P5 `/clear` (new conversation, old kept in history) - P6 405 on web routes.
 
 ## Next
 
