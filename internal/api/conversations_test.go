@@ -17,7 +17,7 @@ func createConv(t *testing.T, e *testEnv, body string) conversation.Conversation
 func TestCreateConversation(t *testing.T) {
 	e := newTestEnv(t)
 
-	work := t.TempDir()
+	work := realTempDir(t)
 	c := createConv(t, e, `{"cwd":"`+work+`","model":"claude-sonnet-5-5","mode":"plan"}`)
 	if c.Cwd != work || c.Model != "claude-sonnet-5-5" || c.ThinkingLevel != "medium" || c.Mode != "plan" || !c.Live || !c.Current {
 		t.Errorf("created = %+v", c)
@@ -25,7 +25,7 @@ func TestCreateConversation(t *testing.T) {
 
 	t.Run("use false keeps the pointer", func(t *testing.T) {
 		other := createConv(t, e, `{"use":false}`)
-		if other.Current || other.Cwd != "/workspace" || e.mgr.CurrentID() != c.ConversationID {
+		if other.Current || other.Cwd != e.workspace || e.mgr.CurrentID() != c.ConversationID {
 			t.Errorf("use:false moved the pointer: other=%+v current=%q", other, e.mgr.CurrentID())
 		}
 	})
@@ -47,7 +47,7 @@ func TestCreateConversation(t *testing.T) {
 
 func TestListAndGetConversations(t *testing.T) {
 	e := newTestEnv(t)
-	workA, workB := t.TempDir(), t.TempDir()
+	workA, workB := realTempDir(t), realTempDir(t)
 	a := createConv(t, e, `{"cwd":"`+workA+`"}`)
 	b := createConv(t, e, `{"cwd":"`+workB+`"}`)
 
@@ -67,7 +67,7 @@ func TestListAndGetConversations(t *testing.T) {
 		t.Errorf("get live = %+v", got)
 	}
 	hist := decode[conversation.Conversation](t, e.do(http.MethodGet, "/v1/conversations/hist_1", ""))
-	if hist.Live || hist.Cwd != "/hist/one" || hist.Model != "" {
+	if hist.Live || hist.Cwd != e.histCwd || hist.Model != "" {
 		t.Errorf("get history = %+v, want not live, no settings", hist)
 	}
 	want(t, e.do(http.MethodGet, "/v1/conversations/nope", ""), http.StatusNotFound, "CONVERSATION_NOT_FOUND")
@@ -76,8 +76,8 @@ func TestListAndGetConversations(t *testing.T) {
 // use switches the target of /v1/prompt, for live and history conversations.
 func TestUseSwitchesPromptTarget(t *testing.T) {
 	e := newTestEnv(t)
-	a := createConv(t, e, `{"cwd":"`+t.TempDir()+`"}`)
-	b := createConv(t, e, `{"cwd":"`+t.TempDir()+`"}`)
+	a := createConv(t, e, `{"cwd":"`+realTempDir(t)+`"}`)
+	b := createConv(t, e, `{"cwd":"`+realTempDir(t)+`"}`)
 
 	promptTarget := func() string {
 		t.Helper()
@@ -105,7 +105,7 @@ func TestUseSwitchesPromptTarget(t *testing.T) {
 	// A history conversation is resumed in its own cwd and becomes the target.
 	rec = e.do(http.MethodPost, "/v1/conversations/hist_1/use", "")
 	want(t, rec, http.StatusOK, "")
-	if h := decode[conversation.Conversation](t, rec); !h.Live || h.Cwd != "/hist/one" {
+	if h := decode[conversation.Conversation](t, rec); !h.Live || h.Cwd != e.histCwd {
 		t.Errorf("resumed = %+v", h)
 	}
 	if got := promptTarget(); got != "hist_1" {

@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"agyd/internal/acp"
 )
 
 func newTextLogger(w io.Writer) *slog.Logger { return slog.New(slog.NewTextHandler(w, nil)) }
@@ -53,7 +55,7 @@ func TestErrorShapes(t *testing.T) {
 	})
 
 	t.Run("cwd must be an existing directory", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := realTempDir(t)
 		file := filepath.Join(dir, "f.txt")
 		if err := os.WriteFile(file, nil, 0o600); err != nil {
 			t.Fatal(err)
@@ -68,7 +70,7 @@ func TestErrorShapes(t *testing.T) {
 	})
 
 	t.Run("cwd that resolves into .gemini is refused", func(t *testing.T) {
-		dir := t.TempDir()
+		dir := realTempDir(t)
 		store := filepath.Join(dir, ".gemini")
 		upper := filepath.Join(dir, "x", ".GEMINI")
 		for _, d := range []string{store, upper} {
@@ -87,10 +89,95 @@ func TestErrorShapes(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			want(t, e.do(http.MethodPost, "/v1/conversations", `{"cwd":"`+cwd+`"}`), http.StatusBadRequest, "INVALID_CWD")
+			rec := e.do(http.MethodPost, "/v1/conversations", `{"cwd":"`+cwd+`"}`)
+			want(t, rec, http.StatusBadRequest, "INVALID_CWD")
+			if strings.Contains(rec.Body.String(), store) {
+				t.Errorf("error leaked .gemini target path %q: %s", store, rec.Body)
+			}
 		}
 		if after := len(e.svc.ListSessions()); after != before {
 			t.Errorf("refused cwd created a conversation: live %d -> %d", before, after)
+		}
+	})
+}
+
+func TestCwdRejectsSymlinks(t *testing.T) {
+	e := newTestEnv(t)
+	base := realTempDir(t)
+	realParent := filepath.Join(base, "real")
+	realTarget := filepath.Join(realParent, "sub")
+	if err := os.MkdirAll(realTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leafLink := filepath.Join(base, "leaf-link")
+	if err := os.Symlink(realTarget, leafLink); err != nil {
+		t.Fatal(err)
+	}
+	midLink := filepath.Join(base, "mid-link")
+	if err := os.Symlink(realParent, midLink); err != nil {
+		t.Fatal(err)
+	}
+	midPath := filepath.Join(midLink, "sub")
+
+	secretFile := filepath.Join(base, "secret-target.txt")
+	if err := os.WriteFile(secretFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	fileLink := filepath.Join(base, "file-link")
+	if err := os.Symlink(secretFile, fileLink); err != nil {
+		t.Fatal(err)
+	}
+
+	before := len(e.svc.ListSessions())
+
+	t.Run("symlink at end of cwd is 400 INVALID_CWD naming real path", func(t *testing.T) {
+		rec := e.do(http.MethodPost, "/v1/conversations", `{"cwd":"`+leafLink+`"}`)
+		want(t, rec, http.StatusBadRequest, "INVALID_CWD")
+		if !strings.Contains(rec.Body.String(), realTarget) {
+			t.Errorf("leaf symlink error body %s does not name real path %q", rec.Body, realTarget)
+		}
+	})
+
+	t.Run("symlink in middle of cwd is 400 INVALID_CWD naming real path", func(t *testing.T) {
+		rec := e.do(http.MethodPost, "/v1/conversations", `{"cwd":"`+midPath+`"}`)
+		want(t, rec, http.StatusBadRequest, "INVALID_CWD")
+		if !strings.Contains(rec.Body.String(), realTarget) {
+			t.Errorf("middle symlink error body %s does not name real path %q", rec.Body, realTarget)
+		}
+	})
+
+	t.Run("symlink to regular file is 400 INVALID_CWD without disclosing file target", func(t *testing.T) {
+		rec := e.do(http.MethodPost, "/v1/conversations", `{"cwd":"`+fileLink+`"}`)
+		want(t, rec, http.StatusBadRequest, "INVALID_CWD")
+		if strings.Contains(rec.Body.String(), secretFile) {
+			t.Errorf("file symlink error body %s leaked non-directory target %q", rec.Body, secretFile)
+		}
+	})
+
+	t.Run("use on history conversation with symlink cwd is 400 INVALID_CWD naming real path", func(t *testing.T) {
+		e.svc.mu.Lock()
+		e.svc.history["hist_link"] = acp.AgentSession{SessionID: "hist_link", Cwd: leafLink, Title: "linked"}
+		e.svc.mu.Unlock()
+		rec := e.do(http.MethodPost, "/v1/conversations/hist_link/use", "")
+		want(t, rec, http.StatusBadRequest, "INVALID_CWD")
+		if !strings.Contains(rec.Body.String(), realTarget) {
+			t.Errorf("use symlink error body %s does not name real path %q", rec.Body, realTarget)
+		}
+	})
+
+	t.Run("whitespace-only and uncleaned dotdot through symlink are 400 INVALID_CWD", func(t *testing.T) {
+		want(t, e.do(http.MethodPost, "/v1/conversations", `{"cwd":"   "}`), http.StatusBadRequest, "INVALID_CWD")
+		want(t, e.do(http.MethodPost, "/v1/conversations", `{"cwd":"`+midLink+`/../real/sub"}`), http.StatusBadRequest, "INVALID_CWD")
+	})
+
+	if after := len(e.svc.ListSessions()); after != before {
+		t.Fatalf("refused symlink cwd created a conversation: live %d -> %d", before, after)
+	}
+
+	t.Run("real path passes", func(t *testing.T) {
+		c := createConv(t, e, `{"cwd":"`+realTarget+`"}`)
+		if c.Cwd != realTarget {
+			t.Errorf("created Cwd = %q, want %q", c.Cwd, realTarget)
 		}
 	})
 }

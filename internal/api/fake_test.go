@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -41,11 +42,11 @@ var fakeChoices = map[string][]string{
 	acp.ConfigMode:     {"default", "accept-edits", "plan"},
 }
 
-func newFakeACPService() *fakeACPService {
+func newFakeACPService(histCwd string) *fakeACPService {
 	return &fakeACPService{
 		sessions: map[string]acp.SessionInfo{},
 		history: map[string]acp.AgentSession{
-			"hist_1": {SessionID: "hist_1", Cwd: "/hist/one", Title: "old one", UpdateTime: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
+			"hist_1": {SessionID: "hist_1", Cwd: histCwd, Title: "old one", UpdateTime: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
 		},
 		inFlight: map[string]chan struct{}{},
 	}
@@ -88,8 +89,8 @@ func (f *fakeACPService) NewSession(_ context.Context, cwd string) (acp.SessionI
 	if f.failRPC != nil {
 		return acp.SessionInfo{}, f.failRPC
 	}
-	if !acp.IsValidCwd(cwd) {
-		return acp.SessionInfo{}, acp.ErrInvalidConfig
+	if err := acp.ValidateCwd(cwd); err != nil {
+		return acp.SessionInfo{}, err
 	}
 	f.seq++
 	id := fmt.Sprintf("conv_%d", f.seq)
@@ -236,6 +237,9 @@ func (f *fakeACPService) ResumeSession(_ context.Context, id, cwd string) (acp.S
 	if info, ok := f.sessions[id]; ok {
 		return info, nil
 	}
+	if err := acp.ValidateCwd(cwd); err != nil {
+		return acp.SessionInfo{}, err
+	}
 	if _, ok := f.history[id]; !ok {
 		return acp.SessionInfo{}, &acp.RPCError{Code: -32603, Message: "Failed to read session"}
 	}
@@ -265,21 +269,47 @@ type testEnv struct {
 	h         http.Handler
 	svc       *fakeACPService
 	mgr       *conversation.Manager
+	workspace string
+	histCwd   string
 	stateFile string // path PUT /v1/defaults writes
+}
+
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	return real
 }
 
 func newTestEnv(t *testing.T) *testEnv {
 	t.Helper()
-	dir := t.TempDir()
-	svc := newFakeACPService()
+	root := realTempDir(t)
+	dir := filepath.Join(root, "state")
+	ws := filepath.Join(root, "workspace")
+	histCwd := filepath.Join(root, "hist", "one")
+	for _, d := range []string{ws, histCwd} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	svc := newFakeACPService(histCwd)
 	log := discardLog()
 	mgr := conversation.New(conversation.Options{
 		Agent:     svc,
 		State:     config.NewStateStore(dir),
 		Log:       log,
-		Workspace: "/workspace",
+		Workspace: ws,
 	})
-	return &testEnv{h: NewHandler(log, svc, mgr, Config{DefaultWorkspace: "/workspace"}), svc: svc, mgr: mgr, stateFile: filepath.Join(dir, "state.json")}
+	return &testEnv{
+		h:         NewHandler(log, svc, mgr, Config{DefaultWorkspace: ws}),
+		svc:       svc,
+		mgr:       mgr,
+		workspace: ws,
+		histCwd:   histCwd,
+		stateFile: filepath.Join(dir, "state.json"),
+	}
 }
 
 // do serves one request; body "" sends none.

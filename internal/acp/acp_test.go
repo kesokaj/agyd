@@ -10,11 +10,21 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 )
+
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	return real
+}
 
 func newTestClient(t *testing.T, mode string, policy PermissionPolicy) *Client {
 	t.Helper()
@@ -26,7 +36,7 @@ func newTestClient(t *testing.T, mode string, policy PermissionPolicy) *Client {
 		Binary:           exe,
 		Args:             []string{"-test.run=^TestHelperACPProcess$", "--", mode},
 		Env:              append(os.Environ(), "GO_WANT_ACP_HELPER=1", "AGY_API_TOKEN=super-secret-gateway-token"),
-		DefaultWorkspace: t.TempDir(),
+		DefaultWorkspace: realTempDir(t),
 		PermissionPolicy: policy,
 	}
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
@@ -54,7 +64,7 @@ func TestClientInitializeAndSessionLifecycle(t *testing.T) {
 		t.Fatalf("Status = %+v, want Ready=true ProtocolVersion=1 Name=fake-agy", st)
 	}
 
-	ws := t.TempDir()
+	ws := realTempDir(t)
 	sess, err := c.NewSession(ctx, ws)
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
@@ -105,7 +115,7 @@ func TestClientPromptStreamingAndPermission(t *testing.T) {
 		if err := c.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		sess, err := c.NewSession(ctx, t.TempDir())
+		sess, err := c.NewSession(ctx, realTempDir(t))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
@@ -137,7 +147,7 @@ func TestClientPromptStreamingAndPermission(t *testing.T) {
 		if err := c.Start(ctx); err != nil {
 			t.Fatalf("Start: %v", err)
 		}
-		sess, err := c.NewSession(ctx, t.TempDir())
+		sess, err := c.NewSession(ctx, realTempDir(t))
 		if err != nil {
 			t.Fatalf("NewSession: %v", err)
 		}
@@ -204,7 +214,7 @@ func TestPermissionDecisionLogged(t *testing.T) {
 			if err := c.Start(ctx); err != nil {
 				t.Fatalf("Start: %v", err)
 			}
-			sess, err := c.NewSession(ctx, t.TempDir())
+			sess, err := c.NewSession(ctx, realTempDir(t))
 			if err != nil {
 				t.Fatalf("NewSession: %v", err)
 			}
@@ -320,7 +330,7 @@ func TestUnsupportedAgentRequestLogged(t *testing.T) {
 	if err := c.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	sess, err := c.NewSession(ctx, t.TempDir())
+	sess, err := c.NewSession(ctx, realTempDir(t))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -346,7 +356,7 @@ func TestClientCancelAndCrashRecovery(t *testing.T) {
 	if err := c.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
-	sess, err := c.NewSession(ctx, t.TempDir())
+	sess, err := c.NewSession(ctx, realTempDir(t))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -423,7 +433,7 @@ func TestClientCancelAndCrashRecovery(t *testing.T) {
 	if err != nil || !st.Ready {
 		t.Fatalf("Status after lazy respawn = %+v, err = %v; want Ready=true", st, err)
 	}
-	sess2, err := c.NewSession(ctx, t.TempDir())
+	sess2, err := c.NewSession(ctx, realTempDir(t))
 	if err != nil || sess2.SessionID == "" {
 		t.Fatalf("NewSession after lazy respawn = %+v, err = %v", sess2, err)
 	}

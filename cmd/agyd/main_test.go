@@ -2,12 +2,24 @@ package main
 
 import (
 	"errors"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
 
+func realTempDir(t *testing.T) string {
+	t.Helper()
+	real, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatalf("EvalSymlinks: %v", err)
+	}
+	return real
+}
+
 func TestConfigFromEnvAndFlags(t *testing.T) {
-	mockGetwd := func() (string, error) { return "/mock/cwd", nil }
+	realWD := realTempDir(t)
+	mockGetwd := func() (string, error) { return realWD, nil }
 	mockLookPath := func(s string) (string, error) { return s, nil }
 	noEnv := func(k string) string {
 		if k == "HOME" {
@@ -24,8 +36,8 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 		if cfg.Addr() != "127.0.0.1:8080" {
 			t.Errorf("Addr() = %q, want 127.0.0.1:8080", cfg.Addr())
 		}
-		if cfg.Workspace != "/mock/cwd" {
-			t.Errorf("Workspace = %q, want /mock/cwd", cfg.Workspace)
+		if cfg.Workspace != realWD {
+			t.Errorf("Workspace = %q, want %q", cfg.Workspace, realWD)
 		}
 		if cfg.PermissionPolicy != "ALLOW_ALL" {
 			t.Errorf("PermissionPolicy = %q, want ALLOW_ALL", cfg.PermissionPolicy)
@@ -202,6 +214,100 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 		cfg, err := loadConfig(nil, noEnv, mockGetwd, mockLookPath)
 		if err != nil || cfg.Model != "" || cfg.Thinking != "" || cfg.Mode != "" || cfg.NoPrompt {
 			t.Fatalf("cfg = %+v, err = %v; want empty settings", cfg, err)
+		}
+	})
+}
+
+func TestWorkspaceRejectsSymlinks(t *testing.T) {
+	base := realTempDir(t)
+	realParent := filepath.Join(base, "real")
+	realTarget := filepath.Join(realParent, "sub")
+	if err := os.MkdirAll(realTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leafLink := filepath.Join(base, "leaf-link")
+	if err := os.Symlink(realTarget, leafLink); err != nil {
+		t.Fatal(err)
+	}
+	midLink := filepath.Join(base, "mid-link")
+	if err := os.Symlink(realParent, midLink); err != nil {
+		t.Fatal(err)
+	}
+	midPath := filepath.Join(midLink, "sub")
+
+	gemDir := filepath.Join(base, ".gemini")
+	if err := os.MkdirAll(gemDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	gemLink := filepath.Join(base, "gem-link")
+	if err := os.Symlink(gemDir, gemLink); err != nil {
+		t.Fatal(err)
+	}
+	plainFile := filepath.Join(base, "file.txt")
+	if err := os.WriteFile(plainFile, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	mockLookPath := func(s string) (string, error) { return s, nil }
+	baseEnv := func(k string) string {
+		if k == "HOME" {
+			return "/mock/home"
+		}
+		return ""
+	}
+	realGetwd := func() (string, error) { return realTarget, nil }
+
+	t.Run("symlink at end of -workspace fails naming real path", func(t *testing.T) {
+		_, err := loadConfig([]string{"-workspace", leafLink}, baseEnv, realGetwd, mockLookPath)
+		if err == nil || !strings.Contains(err.Error(), realTarget) {
+			t.Fatalf("-workspace leaf symlink err = %v, want error naming %q", err, realTarget)
+		}
+	})
+
+	t.Run("symlink in middle of -workspace fails naming real path", func(t *testing.T) {
+		_, err := loadConfig([]string{"-workspace", midPath}, baseEnv, realGetwd, mockLookPath)
+		if err == nil || !strings.Contains(err.Error(), realTarget) {
+			t.Fatalf("-workspace middle symlink err = %v, want error naming %q", err, realTarget)
+		}
+	})
+
+	t.Run("symlink in AGYD_WORKSPACE and default getwd fail naming real path", func(t *testing.T) {
+		_, err := loadConfig(nil, func(k string) string {
+			return map[string]string{"HOME": "/mock/home", "AGYD_WORKSPACE": leafLink}[k]
+		}, realGetwd, mockLookPath)
+		if err == nil || !strings.Contains(err.Error(), realTarget) {
+			t.Fatalf("AGYD_WORKSPACE symlink err = %v, want error naming %q", err, realTarget)
+		}
+		_, err = loadConfig(nil, baseEnv, func() (string, error) { return midPath, nil }, mockLookPath)
+		if err == nil || !strings.Contains(err.Error(), realTarget) {
+			t.Fatalf("getwd middle symlink err = %v, want error naming %q", err, realTarget)
+		}
+	})
+
+	t.Run("real path passes including single trailing slash", func(t *testing.T) {
+		for _, ws := range []string{realTarget, realTarget + string(filepath.Separator)} {
+			cfg, err := loadConfig([]string{"-workspace", ws}, baseEnv, realGetwd, mockLookPath)
+			if err != nil || cfg.Workspace != realTarget {
+				t.Fatalf("loadConfig(-workspace %q) = %+v, err = %v; want Workspace=%q", ws, cfg, err, realTarget)
+			}
+		}
+	})
+
+	t.Run("invalid workspace shapes fail at startup", func(t *testing.T) {
+		for _, bad := range []string{
+			"rel/path",
+			"",
+			"   ",
+			filepath.Join(base, "missing"),
+			plainFile,
+			gemDir,
+			gemLink,
+			midLink + "/../real/sub",
+		} {
+			_, err := loadConfig([]string{"-workspace", bad}, baseEnv, realGetwd, mockLookPath)
+			if err == nil {
+				t.Errorf("loadConfig(-workspace %q) err = nil, want error", bad)
+			}
 		}
 	})
 }

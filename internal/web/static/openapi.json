@@ -119,6 +119,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
@@ -790,6 +793,9 @@
               }
             }
           },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
@@ -1064,7 +1070,7 @@
         "properties": {
           "cwd": {
             "type": "string",
-            "description": "Absolute path of an existing directory; defaults to the server workspace"
+            "description": "Clean absolute real path of an existing directory outside .gemini (no symlinks); defaults to the server workspace"
           },
           "model": {
             "type": "string",
@@ -1290,7 +1296,7 @@
         }
       },
       "BadRequest": {
-        "description": "Malformed body or trailing data after the JSON value (MALFORMED_BODY), missing field (FIELD_REQUIRED), bad cwd: not a clean absolute path, inside .gemini (any case, or via a symlink), or not an existing directory (INVALID_CWD), or a setting agyd or agy rejects (INVALID_SETTING)",
+        "description": "Malformed body or trailing data after the JSON value (MALFORMED_BODY), missing field (FIELD_REQUIRED), bad cwd: not a clean absolute path, contains a symlink (message names the real path), inside .gemini (any case), or not an existing directory (INVALID_CWD), or a setting agyd or agy rejects (INVALID_SETTING)",
         "headers": {
           "Agyd-Conversation": {
             "$ref": "#/components/headers/AgydConversation"

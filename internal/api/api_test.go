@@ -19,8 +19,8 @@ func TestStatusAndHealthEndpoints(t *testing.T) {
 		rec := e.do(http.MethodGet, "/v1/status", "")
 		want(t, rec, http.StatusOK, "")
 		st := decode[statusResponse](t, rec)
-		if !st.Ready || st.ProtocolVersion != 1 || st.Workspace != "/workspace" {
-			t.Errorf("status = %+v, want ready, protocol 1, /workspace", st)
+		if !st.Ready || st.ProtocolVersion != 1 || st.Workspace != e.workspace {
+			t.Errorf("status = %+v, want ready, protocol 1, %s", st, e.workspace)
 		}
 	})
 }

@@ -159,7 +159,7 @@ Every error has the same shape (Google AIP-193):
 
 | HTTP | Reason | Meaning |
 |---|---|---|
-| 400 | `MALFORMED_BODY`, `INVALID_CWD`, `INVALID_SETTING` | Bad JSON or data after the JSON value; `cwd` is not a clean absolute path of an existing directory (or is inside `.gemini`, in any letter case or through a symlink); a model, thinking level or mode agy does not offer |
+| 400 | `MALFORMED_BODY`, `INVALID_CWD`, `INVALID_SETTING` | Bad JSON or data after the JSON value; `cwd` is not a clean absolute path of an existing real directory, contains a symlink (the error names the real path), or is inside `.gemini` (in any letter case); a model, thinking level or mode agy does not offer |
 | 401 | `ACP_AUTH_REQUIRED` | `agy` is not signed in. Run `agy` once, or `agy acp --login` |
 | 403 | `FORBIDDEN_HOST`, `CROSS_ORIGIN_REQUEST` | The request's `Host` header is not an address agyd accepts (loopback, or with `-host` this machine's IPs and hostname); a browser sent a cross-origin write |
 | 404 | `NOT_FOUND`, `CONVERSATION_NOT_FOUND`, `NO_CURRENT_CONVERSATION` | Unknown path; unknown or ended conversation; or nothing is current yet |
@@ -188,7 +188,7 @@ flowchart LR
 | `-no-prompt` | `AGYD_NO_PROMPT` | `false` | Never ask for the model at startup |
 | `-host` | `AGYD_HOST` | `127.0.0.1` | Listen address: an IP or `localhost`. `0.0.0.0` listens on all IPv4 interfaces, `::` on all IPv6 ones (see [Safety](#safety)) |
 | `-port` | `AGYD_PORT` | `8080` | Listen port |
-| `-workspace` | `AGYD_WORKSPACE` | current folder | Default folder for new conversations |
+| `-workspace` | `AGYD_WORKSPACE` | current folder | Default folder for new conversations (real path, no symlinks) |
 | `-state-dir` | `AGYD_STATE_DIR` | `~/.config/agyd` | Directory holding `state.json` (must be absolute) |
 | `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for agent tool calls |
 | `-agy` | `AGYD_AGY` | `agy` | Path to the `agy` binary |
@@ -241,7 +241,7 @@ To run `agyd` inside a container:
 | `agyd ask` says it cannot connect | Start `agyd` first, or point the CLI at it with `--port`/`AGYD_PORT` |
 | `GET /v1/status` returns `500` or `502` | `agy` failed to start. Check it is on `PATH`, or pass `-agy /full/path/to/agy`, and read `agyd`'s log |
 | `400 INVALID_SETTING` | Use a value from `agyd models` |
-| `400 INVALID_CWD` | Use an absolute path that exists, e.g. `"$(pwd)"`, and that is not under `~/.gemini` |
+| `400 INVALID_CWD` | Use a real absolute path without symlinks, e.g. `"$(pwd -P)"` (or the real path named in the error), and not under `~/.gemini` |
 | `403 FORBIDDEN_HOST` | Use an address agyd accepts: `127.0.0.1`/`localhost`, or with `-host 0.0.0.0` one listed in its startup warning |
 | `404` on `/v1/sessions/...` | Renamed to `/v1/conversations/...` (ADR-005) |
 | `409 PROMPT_IN_FLIGHT` | Wait for the turn to finish, or cancel it first (`POST /v1/cancel`, or Ctrl-C in `agyd ask`) |

@@ -210,7 +210,7 @@ func httpJSON(t *testing.T, method, url, body string, wantCode int) map[string]a
 }
 
 func TestRestartPreservesStateAcrossSIGTERM(t *testing.T) {
-	tmp := t.TempDir()
+	tmp := realTempDir(t)
 	home := filepath.Join(tmp, "home")
 	stateDir := filepath.Join(tmp, "custom-state")
 	dirA := filepath.Join(tmp, "dirA")

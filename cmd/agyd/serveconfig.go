@@ -147,9 +147,12 @@ func (r *rawFlags) validate(getenv func(string) string, lookPath func(string) (s
 	if err != nil {
 		return appConfig{}, err
 	}
-	ws := filepath.Clean(strings.TrimSpace(r.workspace))
-	if !filepath.IsAbs(ws) {
-		return appConfig{}, fmt.Errorf("workspace %q must be an absolute path", r.workspace)
+	ws := strings.TrimSpace(r.workspace)
+	if len(ws) > 1 {
+		ws = strings.TrimSuffix(ws, string(filepath.Separator))
+	}
+	if err := acp.ValidateDir("workspace", ws); err != nil {
+		return appConfig{}, err
 	}
 	stateDir, err := resolveStateDir(r.stateDir, r.stateDirSet, getenv)
 	if err != nil {

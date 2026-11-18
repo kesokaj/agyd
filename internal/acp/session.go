@@ -5,17 +5,17 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 )
 
-// IsValidCwd reports whether cwd is a clean absolute path outside the .gemini credential store.
+// isValidCwd reports whether cwd is a clean absolute path outside the .gemini credential store.
 // The segment match ignores case because macOS and Windows file systems do.
-// It reads only the path text: callers that accept a client path also check
-// the symlink-resolved path.
-func IsValidCwd(cwd string) bool {
+// It reads only the path text; ValidateDir and ValidateCwd also enforce existence and reject symlinks.
+func isValidCwd(cwd string) bool {
 	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd {
 		return false
 	}
@@ -27,21 +27,53 @@ func IsValidCwd(cwd string) bool {
 	return true
 }
 
-func resolvesIntoDotGemini(cwd string) bool {
-	real, err := filepath.EvalSymlinks(cwd)
-	return err == nil && !IsValidCwd(real)
+type invalidDirError struct{ msg string }
+
+func (e invalidDirError) Error() string { return e.msg }
+func (e invalidDirError) Unwrap() error { return ErrInvalidConfig }
+
+// ValidateDir checks that dir is a clean absolute path to an existing real
+// directory outside .gemini with no symlinks in any path component. When dir
+// traverses a symlink to a directory outside .gemini, the error names the
+// resolved real path. Returned errors match errors.Is(err, ErrInvalidConfig).
+func ValidateDir(label, dir string) error {
+	if !isValidCwd(dir) {
+		return invalidDirError{fmt.Sprintf("%s %q must be a clean absolute path outside .gemini", label, dir)}
+	}
+	if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+		return invalidDirError{fmt.Sprintf("%s %q must be an existing directory", label, dir)}
+	}
+	real, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		return invalidDirError{fmt.Sprintf("%s %q must be an existing directory", label, dir)}
+	}
+	if lfi, err := os.Lstat(real); err != nil || !lfi.IsDir() {
+		return invalidDirError{fmt.Sprintf("%s %q must be an existing directory", label, dir)}
+	}
+	if !isValidCwd(real) {
+		return invalidDirError{fmt.Sprintf("%s %q must not resolve into .gemini", label, dir)}
+	}
+	if real != dir {
+		return invalidDirError{fmt.Sprintf("%s %q must not contain symlinks; real path is %q", label, dir, real)}
+	}
+	return nil
+}
+
+// ValidateCwd checks a conversation working directory with ValidateDir("cwd", cwd).
+func ValidateCwd(cwd string) error {
+	return ValidateDir("cwd", cwd)
 }
 
 // NewSession calls session/new on the ACP agent and registers the session in memory.
 func (c *Client) NewSession(ctx context.Context, cwd string) (SessionInfo, error) {
-	if err := c.ensureReady(ctx); err != nil {
-		return SessionInfo{}, err
-	}
 	if cwd == "" {
 		cwd = c.cfg.DefaultWorkspace
 	}
-	if !IsValidCwd(cwd) {
-		return SessionInfo{}, fmt.Errorf("%w: cwd %q must be a clean absolute path outside .gemini", ErrInvalidConfig, cwd)
+	if err := ValidateCwd(cwd); err != nil {
+		return SessionInfo{}, err
+	}
+	if err := c.ensureReady(ctx); err != nil {
+		return SessionInfo{}, err
 	}
 
 	var res sessionNewResult

@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -13,7 +14,7 @@ import (
 func TestSessionConfigOptions(t *testing.T) {
 	c := newTestClient(t, "standard", PermissionAllowAll)
 	ctx := t.Context()
-	sess, err := c.NewSession(ctx, t.TempDir())
+	sess, err := c.NewSession(ctx, realTempDir(t))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -50,7 +51,7 @@ func TestSessionConfigOptions(t *testing.T) {
 func TestSetConfigAndCloseRefusedDuringTurn(t *testing.T) {
 	c := newTestClient(t, "standard", PermissionAllowAll)
 	ctx := t.Context()
-	sess, err := c.NewSession(ctx, t.TempDir())
+	sess, err := c.NewSession(ctx, realTempDir(t))
 	if err != nil {
 		t.Fatalf("NewSession: %v", err)
 	}
@@ -99,36 +100,90 @@ func TestListAndResumeAgentSessions(t *testing.T) {
 		t.Errorf("UpdateTime = %v, want %v", list[0].UpdateTime, want)
 	}
 
-	info, err := c.ResumeSession(ctx, "hist_1", "/tmp/hist")
+	histDir := realTempDir(t)
+	info, err := c.ResumeSession(ctx, "hist_1", histDir)
 	if err != nil {
 		t.Fatalf("ResumeSession: %v", err)
 	}
-	if info.SessionID != "hist_1" || info.Cwd != "/tmp/hist" || info.Setting(ConfigThinking) != "medium" {
+	if info.SessionID != "hist_1" || info.Cwd != histDir || info.Setting(ConfigThinking) != "medium" {
 		t.Errorf("resumed = %+v", info)
 	}
 	if _, err := c.GetSession("hist_1"); err != nil {
 		t.Errorf("resumed session not registered: %v", err)
 	}
-	if again, err := c.ResumeSession(ctx, "hist_1", "/tmp/hist"); err != nil || again.SessionID != "hist_1" {
+	if again, err := c.ResumeSession(ctx, "hist_1", histDir); err != nil || again.SessionID != "hist_1" {
 		t.Errorf("resuming a live session = %+v, %v; want it returned as is", again, err)
 	}
-	if _, err := c.ResumeSession(ctx, "missing", "/tmp/hist"); !errors.Is(err, ErrSessionNotFound) {
+	if _, err := c.ResumeSession(ctx, "missing", histDir); !errors.Is(err, ErrSessionNotFound) {
 		t.Errorf("resume unknown err = %v, want ErrSessionNotFound", err)
 	}
 	if _, err := c.ResumeSession(ctx, "hist_2", "relative"); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("resume with a bad cwd err = %v, want ErrInvalidConfig", err)
 	}
-	gemDir := filepath.Join(t.TempDir(), ".gemini")
+	base := realTempDir(t)
+	gemDir := filepath.Join(base, ".gemini")
 	if err := os.MkdirAll(gemDir, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	sneaky := filepath.Join(t.TempDir(), "sneaky")
+	sneaky := filepath.Join(base, "sneaky")
 	if err := os.Symlink(gemDir, sneaky); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := c.ResumeSession(ctx, "hist_2", sneaky); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("resume with symlink to .gemini err = %v, want ErrInvalidConfig", err)
 	}
+}
+
+func TestSessionRejectsSymlinkCwd(t *testing.T) {
+	c := newTestClient(t, "standard", PermissionAllowAll)
+	ctx := t.Context()
+
+	base := realTempDir(t)
+	realParent := filepath.Join(base, "real")
+	realTarget := filepath.Join(realParent, "sub")
+	if err := os.MkdirAll(realTarget, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	leafLink := filepath.Join(base, "leaf-link")
+	if err := os.Symlink(realTarget, leafLink); err != nil {
+		t.Fatal(err)
+	}
+	midLink := filepath.Join(base, "mid-link")
+	if err := os.Symlink(realParent, midLink); err != nil {
+		t.Fatal(err)
+	}
+	midPath := filepath.Join(midLink, "sub")
+
+	for _, tc := range []struct {
+		name, path string
+	}{
+		{"leaf symlink", leafLink},
+		{"middle symlink", midPath},
+	} {
+		t.Run("NewSession "+tc.name, func(t *testing.T) {
+			_, err := c.NewSession(ctx, tc.path)
+			if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), realTarget) {
+				t.Fatalf("NewSession(%q) err = %v, want ErrInvalidConfig naming %q", tc.path, err, realTarget)
+			}
+		})
+		t.Run("ResumeSession "+tc.name, func(t *testing.T) {
+			_, err := c.ResumeSession(ctx, "hist_2", tc.path)
+			if !errors.Is(err, ErrInvalidConfig) || !strings.Contains(err.Error(), realTarget) {
+				t.Fatalf("ResumeSession(%q) err = %v, want ErrInvalidConfig naming %q", tc.path, err, realTarget)
+			}
+		})
+	}
+
+	t.Run("real path passes", func(t *testing.T) {
+		sess, err := c.NewSession(ctx, realTarget)
+		if err != nil || sess.Cwd != realTarget {
+			t.Fatalf("NewSession(%q) = %+v, err = %v", realTarget, sess, err)
+		}
+		resumed, err := c.ResumeSession(ctx, "hist_2", realTarget)
+		if err != nil || resumed.Cwd != realTarget {
+			t.Fatalf("ResumeSession(%q) = %+v, err = %v", realTarget, resumed, err)
+		}
+	})
 }
 
 func TestParseConfigOptionsSkipsUnknownShapes(t *testing.T) {
