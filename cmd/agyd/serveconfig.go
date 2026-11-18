@@ -28,8 +28,8 @@ type appConfig struct {
 	Model, Thinking, Mode string
 	NoPrompt              bool
 
-	// ConfigDir holds config.env and state.json (set by loadServeConfig).
-	ConfigDir string
+	// StateDir holds state.json.
+	StateDir string
 }
 
 // Addr is the host:port the server listens on.
@@ -42,9 +42,10 @@ func (e *usageError) Error() string { return "help requested" }
 
 // rawFlags holds the unvalidated flag values.
 type rawFlags struct {
-	host, port, bin, args, workspace, policy string
-	model, thinking, mode                    string
-	noPrompt                                 bool
+	host, port, bin, args, workspace, stateDir, policy string
+	model, thinking, mode                              string
+	noPrompt                                           bool
+	stateDirSet                                        bool
 }
 
 func envOr(getenv func(string) string, key, fallback string) string {
@@ -54,8 +55,8 @@ func envOr(getenv func(string) string, key, fallback string) string {
 	return fallback
 }
 
-// newServeFlags binds the serve flags; defaults come from getenv (the layered
-// ./.env > shell > config.env view).
+// newServeFlags binds the serve flags; defaults come from AGYD_* env vars or
+// built-in defaults.
 func newServeFlags(getenv func(string) string, wd string, noPrompt bool) (*flag.FlagSet, *rawFlags) {
 	r := &rawFlags{}
 	fs := flag.NewFlagSet("agyd", flag.ContinueOnError)
@@ -65,6 +66,7 @@ func newServeFlags(getenv func(string) string, wd string, noPrompt bool) (*flag.
 	fs.StringVar(&r.bin, "agy", envOr(getenv, "AGYD_AGY", "agy"), "agy executable (env AGYD_AGY)")
 	fs.StringVar(&r.args, "acp-args", envOr(getenv, "AGYD_ACP_ARGS", "acp"), "space-separated arguments for agy (env AGYD_ACP_ARGS)")
 	fs.StringVar(&r.workspace, "workspace", envOr(getenv, "AGYD_WORKSPACE", wd), "default conversation working directory (env AGYD_WORKSPACE)")
+	fs.StringVar(&r.stateDir, "state-dir", getenv("AGYD_STATE_DIR"), "directory holding state.json (env AGYD_STATE_DIR; default ~/.config/agyd)")
 	fs.StringVar(&r.policy, "permission-policy", envOr(getenv, "AGYD_PERMISSION_POLICY", "allow_all"), "allow_all approves every agent tool call; deny_all refuses them (env AGYD_PERMISSION_POLICY)")
 	fs.StringVar(&r.model, "model", getenv("AGYD_MODEL"), "default model for new conversations, e.g. gemini-4-carbon (env AGYD_MODEL)")
 	fs.StringVar(&r.thinking, "thinking", getenv("AGYD_THINKING"), "default thinking level: low, medium or high (env AGYD_THINKING)")
@@ -78,8 +80,8 @@ const usageHeader = `agyd: HTTP + SSE API and Swagger docs in front of agy.
 Usage: agyd [serve] [flags]
        agyd <command> [flags]   client of a running agyd (agyd help lists commands)
 
-Settings, highest first: flags > ./.env (AGYD_MODEL and AGYD_THINKING
-only) > shell env > ~/.config/agyd/config.env.
+Settings, highest first: flags > AGYD_* environment variables > saved defaults
+in state.json (in AGYD_STATE_DIR, default ~/.config/agyd) > built-in defaults.
 
 Flags:
 `
@@ -111,13 +113,25 @@ func loadConfig(args []string, getenv func(string) string, getwd func() (string,
 		}
 		return appConfig{}, fmt.Errorf("parsing flags: %w", err)
 	}
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "state-dir" {
+			r.stateDirSet = true
+		}
+	})
 	if fs.NArg() > 0 {
 		return appConfig{}, fmt.Errorf("unexpected positional arguments: %v", fs.Args())
 	}
-	return r.validate(lookPath)
+	return r.validate(getenv, lookPath)
 }
 
-func (r *rawFlags) validate(lookPath func(string) (string, error)) (appConfig, error) {
+func resolveStateDir(explicit string, explicitSet bool, getenv func(string) string) (string, error) {
+	if explicitSet {
+		return config.ValidateStateDir(explicit)
+	}
+	return config.StateDir(getenv)
+}
+
+func (r *rawFlags) validate(getenv func(string) string, lookPath func(string) (string, error)) (appConfig, error) {
 	host := strings.ToLower(strings.TrimSpace(r.host))
 	if host != "localhost" && net.ParseIP(host) == nil {
 		return appConfig{}, fmt.Errorf("invalid host %q: want an IP address or localhost, e.g. 127.0.0.1 or 0.0.0.0", r.host)
@@ -137,6 +151,10 @@ func (r *rawFlags) validate(lookPath func(string) (string, error)) (appConfig, e
 	if !filepath.IsAbs(ws) {
 		return appConfig{}, fmt.Errorf("workspace %q must be an absolute path", r.workspace)
 	}
+	stateDir, err := resolveStateDir(r.stateDir, r.stateDirSet, getenv)
+	if err != nil {
+		return appConfig{}, err
+	}
 	for name, v := range map[string]string{"model": r.model, "thinking": r.thinking, "mode": r.mode} {
 		if v != "" && !config.ValidSettingValue(v) {
 			return appConfig{}, fmt.Errorf("invalid %s %q: want 1-64 of [A-Za-z0-9._-]", name, v)
@@ -145,7 +163,7 @@ func (r *rawFlags) validate(lookPath func(string) (string, error)) (appConfig, e
 	return appConfig{
 		Host: host, Port: port,
 		ACPBin: strings.TrimSpace(r.bin), ACPArgs: strings.Fields(r.args),
-		Workspace: ws, PermissionPolicy: policy,
+		Workspace: ws, StateDir: stateDir, PermissionPolicy: policy,
 		Model: r.model, Thinking: r.thinking, Mode: r.mode, NoPrompt: r.noPrompt,
 	}, nil
 }

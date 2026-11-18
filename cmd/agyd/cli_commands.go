@@ -150,7 +150,7 @@ func runModels(ctx context.Context, c *cli, _ *cliOpts, _ []string) error {
 }
 
 // runDefaults: GET /v1/defaults, or PUT /v1/defaults when a flag is given
-// (agyd merges and saves them to config.env).
+// (agyd merges and saves them to state.json).
 func runDefaults(ctx context.Context, c *cli, o *cliOpts, _ []string) error {
 	method, body := http.MethodGet, any(nil)
 	if o.hasSettings() {
@@ -164,7 +164,7 @@ func runDefaults(ctx context.Context, c *cli, o *cliOpts, _ []string) error {
 	fmt.Fprintf(tw, "model\t%s\nthinking\t%s\nmode\t%s\n",
 		agyDefault(d.Model), agyDefault(d.ThinkingLevel), agyDefault(d.Mode))
 	if method == http.MethodPut {
-		fmt.Fprintln(tw, "(saved to config.env)")
+		fmt.Fprintln(tw, "(saved to state.json)")
 	}
 	return tw.Flush()
 }

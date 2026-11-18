@@ -9,12 +9,17 @@ import (
 func TestConfigFromEnvAndFlags(t *testing.T) {
 	mockGetwd := func() (string, error) { return "/mock/cwd", nil }
 	mockLookPath := func(s string) (string, error) { return s, nil }
-	noEnv := func(string) string { return "" }
+	noEnv := func(k string) string {
+		if k == "HOME" {
+			return "/mock/home"
+		}
+		return ""
+	}
 
-	t.Run("defaults are loopback 8080, cwd, allow_all", func(t *testing.T) {
+	t.Run("defaults are loopback 8080, cwd, allow_all, home state dir", func(t *testing.T) {
 		cfg, err := loadConfig(nil, noEnv, mockGetwd, mockLookPath)
 		if err != nil {
-			t.Fatalf("loadConfig with empty env err = %v, want nil", err)
+			t.Fatalf("loadConfig with default env err = %v, want nil", err)
 		}
 		if cfg.Addr() != "127.0.0.1:8080" {
 			t.Errorf("Addr() = %q, want 127.0.0.1:8080", cfg.Addr())
@@ -24,6 +29,37 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 		}
 		if cfg.PermissionPolicy != "ALLOW_ALL" {
 			t.Errorf("PermissionPolicy = %q, want ALLOW_ALL", cfg.PermissionPolicy)
+		}
+		if cfg.StateDir != "/mock/home/.config/agyd" {
+			t.Errorf("StateDir = %q, want /mock/home/.config/agyd", cfg.StateDir)
+		}
+	})
+
+	t.Run("state-dir flag and AGYD_STATE_DIR override HOME and reject relative paths", func(t *testing.T) {
+		cfg, err := loadConfig(nil, func(k string) string { return map[string]string{"AGYD_STATE_DIR": "/var/lib/agyd"}[k] }, mockGetwd, mockLookPath)
+		if err != nil || cfg.StateDir != "/var/lib/agyd" {
+			t.Fatalf("AGYD_STATE_DIR without HOME: cfg=%+v, err=%v", cfg, err)
+		}
+		cfg, err = loadConfig([]string{"-state-dir", "/flag/state"}, func(k string) string { return map[string]string{"AGYD_STATE_DIR": "rel/bad"}[k] }, mockGetwd, mockLookPath)
+		if err != nil || cfg.StateDir != "/flag/state" {
+			t.Fatalf("-state-dir override: cfg=%+v, err=%v", cfg, err)
+		}
+		if _, err := loadConfig([]string{"-state-dir", "rel/dir"}, noEnv, mockGetwd, mockLookPath); err == nil {
+			t.Error("relative -state-dir: err = nil, want an error")
+		}
+		if _, err := loadConfig([]string{"-state-dir", ""}, func(k string) string {
+			return map[string]string{"AGYD_STATE_DIR": "/var/lib/agyd", "HOME": "/mock/home"}[k]
+		}, mockGetwd, mockLookPath); err == nil {
+			t.Error("empty -state-dir fell back to env/HOME; want error")
+		}
+		if _, err := loadConfig([]string{"-state-dir", "   "}, noEnv, mockGetwd, mockLookPath); err == nil {
+			t.Error("whitespace -state-dir: err = nil, want an error")
+		}
+		if _, err := loadConfig([]string{"-state-dir", "/mock/home/.gemini/agyd"}, noEnv, mockGetwd, mockLookPath); err == nil {
+			t.Error(".gemini -state-dir: err = nil, want an error")
+		}
+		if _, err := loadConfig(nil, func(string) string { return "" }, mockGetwd, mockLookPath); err == nil {
+			t.Error("missing HOME and AGYD_STATE_DIR: err = nil, want an error")
 		}
 	})
 
@@ -36,6 +72,7 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 
 	t.Run("env overrides and no PORT fallback", func(t *testing.T) {
 		env := map[string]string{
+			"HOME":                   "/mock/home",
 			"PORT":                   "9090",
 			"AGYD_HOST":              "localhost",
 			"AGYD_PORT":              "8081",
@@ -51,7 +88,7 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 	})
 
 	t.Run("flags override env", func(t *testing.T) {
-		env := map[string]string{"AGYD_HOST": "localhost", "AGYD_PORT": "8081"}
+		env := map[string]string{"HOME": "/mock/home", "AGYD_HOST": "localhost", "AGYD_PORT": "8081"}
 		cfg, err := loadConfig([]string{"-host", "0.0.0.0", "-port", "9000"}, func(k string) string { return env[k] }, mockGetwd, mockLookPath)
 		if err != nil {
 			t.Fatalf("loadConfig: %v", err)
@@ -120,17 +157,20 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s: err = %v, want *usageError", arg, err)
 			}
-			for _, f := range []string{"-host", "-port", "-workspace", "-permission-policy", "-agy", "-acp-args", "AGYD_HOST",
-				"-model", "-thinking", "-mode", "-no-prompt", "AGYD_MODEL", "AGYD_THINKING", "AGYD_MODE", "AGYD_NO_PROMPT", "config.env"} {
+			for _, f := range []string{"-host", "-port", "-workspace", "-state-dir", "-permission-policy", "-agy", "-acp-args", "AGYD_HOST",
+				"AGYD_STATE_DIR", "-model", "-thinking", "-mode", "-no-prompt", "AGYD_MODEL", "AGYD_THINKING", "AGYD_MODE", "AGYD_NO_PROMPT", "state.json"} {
 				if !strings.Contains(ue.text, f) {
 					t.Errorf("%s: usage lacks %q:\n%s", arg, f, ue.text)
 				}
+			}
+			if strings.Contains(ue.text, "config.env") || strings.Contains(ue.text, "./.env") {
+				t.Errorf("%s: usage still mentions removed env files:\n%s", arg, ue.text)
 			}
 		}
 	})
 
 	t.Run("settings come from env, flags win, values are validated", func(t *testing.T) {
-		env := map[string]string{"AGYD_MODEL": "gemini-4-carbon", "AGYD_THINKING": "low", "AGYD_MODE": "plan", "AGYD_NO_PROMPT": "true"}
+		env := map[string]string{"HOME": "/mock/home", "AGYD_MODEL": "gemini-4-carbon", "AGYD_THINKING": "low", "AGYD_MODE": "plan", "AGYD_NO_PROMPT": "true"}
 		getenv := func(k string) string { return env[k] }
 		cfg, err := loadConfig(nil, getenv, mockGetwd, mockLookPath)
 		if err != nil {
@@ -153,7 +193,7 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 				t.Errorf("loadConfig(%q) err = nil, want an invalid-value error", args)
 			}
 		}
-		if _, err := loadConfig(nil, func(k string) string { return map[string]string{"AGYD_NO_PROMPT": "maybe"}[k] }, mockGetwd, mockLookPath); err == nil {
+		if _, err := loadConfig(nil, func(k string) string { return map[string]string{"HOME": "/mock/home", "AGYD_NO_PROMPT": "maybe"}[k] }, mockGetwd, mockLookPath); err == nil {
 			t.Error("AGYD_NO_PROMPT=maybe: err = nil, want an error")
 		}
 	})

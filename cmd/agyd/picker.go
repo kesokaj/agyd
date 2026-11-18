@@ -16,10 +16,10 @@ import (
 const pickerAttempts = 3
 
 // pickDefaults asks for the default model, then the thinking level, then
-// whether to save them to configPath (D4, D16). Enter or EOF keeps the
+// whether to save them to statePath (ADR-006). Enter or EOF keeps the
 // preselected value (agy's current one). It returns zero Settings when agy
 // reported no model option.
-func pickDefaults(in io.Reader, out io.Writer, opts []acp.ConfigOption, configPath string) (conversation.Settings, bool) {
+func pickDefaults(in io.Reader, out io.Writer, opts []acp.ConfigOption, statePath string) (conversation.Settings, bool) {
 	model, ok := findOption(opts, acp.ConfigModel)
 	if !ok {
 		return conversation.Settings{}, false
@@ -29,7 +29,7 @@ func pickDefaults(in io.Reader, out io.Writer, opts []acp.ConfigOption, configPa
 	if thinking, ok := findOption(opts, acp.ConfigThinking); ok {
 		s.ThinkingLevel = choose(r, out, "Default thinking level", thinking)
 	}
-	fmt.Fprintf(out, "Save as default in %s? [Y/n] ", configPath)
+	fmt.Fprintf(out, "Save as default in %s? [Y/n] ", statePath)
 	answer, _ := readAnswer(r)
 	switch strings.ToLower(answer) {
 	case "", "y", "yes":

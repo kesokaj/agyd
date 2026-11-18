@@ -1,0 +1,15 @@
+//go:build darwin || dragonfly || freebsd || netbsd || openbsd
+
+package main
+
+import (
+	"os"
+	"syscall"
+	"unsafe"
+)
+
+func fileIsTerminal(f *os.File) bool {
+	var t syscall.Termios
+	_, _, errno := syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), syscall.TIOCGETA, uintptr(unsafe.Pointer(&t)))
+	return errno == 0
+}

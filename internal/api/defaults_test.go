@@ -40,10 +40,10 @@ func TestDefaultsRoundTrip(t *testing.T) {
 	if got := decode[conversation.Settings](t, e.do(http.MethodGet, "/v1/defaults", "")); got != wantSettings {
 		t.Errorf("GET after PUT = %+v, want %+v", got, wantSettings)
 	}
-	file := readFile(t, e.configEnv)
-	for _, line := range []string{"AGYD_MODEL=claude-sonnet-5-5", "AGYD_THINKING=high"} {
-		if !strings.Contains(file, line) {
-			t.Errorf("config.env lacks %q:\n%s", line, file)
+	file := readFile(t, e.stateFile)
+	for _, snippet := range []string{`"model": "claude-sonnet-5-5"`, `"thinkingLevel": "high"`} {
+		if !strings.Contains(file, snippet) {
+			t.Errorf("state.json lacks %q:\n%s", snippet, file)
 		}
 	}
 
@@ -52,8 +52,8 @@ func TestDefaultsRoundTrip(t *testing.T) {
 		if got.Model != "claude-sonnet-5-5" || got.ThinkingLevel != "high" || got.Mode != "plan" {
 			t.Errorf("merged = %+v", got)
 		}
-		if file := readFile(t, e.configEnv); !strings.Contains(file, "AGYD_MODEL=claude-sonnet-5-5") || !strings.Contains(file, "AGYD_MODE=plan") {
-			t.Errorf("config.env after merge:\n%s", file)
+		if file := readFile(t, e.stateFile); !strings.Contains(file, `"model": "claude-sonnet-5-5"`) || !strings.Contains(file, `"mode": "plan"`) {
+			t.Errorf("state.json after merge:\n%s", file)
 		}
 	})
 
@@ -68,7 +68,7 @@ func TestDefaultsRoundTrip(t *testing.T) {
 func TestDefaultsRejectInjection(t *testing.T) {
 	e := newTestEnv(t)
 	want(t, e.do(http.MethodPut, "/v1/defaults", `{"model":"gemini-4-carbon"}`), http.StatusOK, "")
-	before := readFile(t, e.configEnv)
+	before := readFile(t, e.stateFile)
 
 	cases := []struct {
 		name, body, reason string
@@ -85,17 +85,18 @@ func TestDefaultsRejectInjection(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			want(t, e.do(http.MethodPut, "/v1/defaults", tc.body), http.StatusBadRequest, tc.reason)
-			if after := readFile(t, e.configEnv); after != before {
-				t.Errorf("config.env changed:\n%s", after)
+			if after := readFile(t, e.stateFile); after != before {
+				t.Errorf("state.json changed:\n%s", after)
 			}
 		})
 	}
 
 	t.Run("well-formed but not offered once options are known", func(t *testing.T) {
 		createConv(t, e, `{}`)
+		beforeKnown := readFile(t, e.stateFile)
 		want(t, e.do(http.MethodPut, "/v1/defaults", `{"model":"unknown-family"}`), http.StatusBadRequest, "INVALID_SETTING")
-		if after := readFile(t, e.configEnv); after != before {
-			t.Errorf("config.env changed:\n%s", after)
+		if after := readFile(t, e.stateFile); after != beforeKnown {
+			t.Errorf("state.json changed:\n%s", after)
 		}
 		if got := e.mgr.Defaults(); got.Model != "gemini-4-carbon" {
 			t.Errorf("defaults = %+v, want unchanged", got)

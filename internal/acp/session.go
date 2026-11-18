@@ -27,6 +27,11 @@ func IsValidCwd(cwd string) bool {
 	return true
 }
 
+func resolvesIntoDotGemini(cwd string) bool {
+	real, err := filepath.EvalSymlinks(cwd)
+	return err == nil && !IsValidCwd(real)
+}
+
 // NewSession calls session/new on the ACP agent and registers the session in memory.
 func (c *Client) NewSession(ctx context.Context, cwd string) (SessionInfo, error) {
 	if err := c.ensureReady(ctx); err != nil {

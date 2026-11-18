@@ -61,13 +61,20 @@ func (s Settings) validate() error {
 }
 
 // SettingsOf returns a live conversation's current settings as agy reports
-// them.
+// them, dropping any malformed value outside config.ValidSettingValue.
 func SettingsOf(info acp.SessionInfo) Settings {
 	return Settings{
-		Model:         info.Setting(acp.ConfigModel),
-		ThinkingLevel: info.Setting(acp.ConfigThinking),
-		Mode:          info.Setting(acp.ConfigMode),
+		Model:         validSettingOrEmpty(info.Setting(acp.ConfigModel)),
+		ThinkingLevel: validSettingOrEmpty(info.Setting(acp.ConfigThinking)),
+		Mode:          validSettingOrEmpty(info.Setting(acp.ConfigMode)),
 	}
+}
+
+func validSettingOrEmpty(v string) string {
+	if config.ValidSettingValue(v) {
+		return v
+	}
+	return ""
 }
 
 // Defaults returns the running defaults for new and resumed conversations.
@@ -78,8 +85,8 @@ func (m *Manager) Defaults() Settings {
 }
 
 // SetDefaults validates s (format, and membership in agy's reported options
-// when known), optionally persists the given keys to config.env, and merges
-// them into the running defaults.
+// when known), optionally persists the merged defaults to state.json, and
+// merges s into the running defaults.
 func (m *Manager) SetDefaults(s Settings, persist bool) (Settings, error) {
 	if s.IsZero() {
 		return Settings{}, fmt.Errorf("%w: give at least one of model, thinkingLevel, mode", ErrInvalidSetting)
@@ -87,20 +94,33 @@ func (m *Manager) SetDefaults(s Settings, persist bool) (Settings, error) {
 	if err := s.validate(); err != nil {
 		return Settings{}, err
 	}
-	m.defaultsMu.Lock()
-	defer m.defaultsMu.Unlock()
+	m.saveMu.Lock()
+	defer m.saveMu.Unlock()
 	if err := m.checkKnown(s); err != nil {
 		return Settings{}, err
 	}
-	if persist && m.saveDefaults != nil {
-		if err := m.saveDefaults(s); err != nil {
+	if !persist {
+		m.mu.Lock()
+		defer m.mu.Unlock()
+		m.defaults = m.defaults.overlay(s)
+		return m.defaults, nil
+	}
+	m.mu.Lock()
+	nextSaved := m.savedDefaults.overlay(s)
+	nextRunning := m.defaults.overlay(s)
+	snap := m.snapshotStateLocked()
+	snap.Defaults = config.Settings(nextSaved)
+	m.mu.Unlock()
+	if m.state != nil {
+		if err := m.state.Save(snap); err != nil {
 			return Settings{}, fmt.Errorf("saving defaults: %w", err)
 		}
 	}
 	m.mu.Lock()
-	defer m.mu.Unlock()
-	m.defaults = m.defaults.overlay(s)
-	return m.defaults, nil
+	m.savedDefaults = nextSaved
+	m.defaults = nextRunning
+	m.mu.Unlock()
+	return nextRunning, nil
 }
 
 // checkKnown rejects values absent from the last configOptions agy reported.

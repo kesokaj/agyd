@@ -7,16 +7,13 @@
 
 ## Now
 
-`PLAN-folder-isolation` (`ADR-006`; Phase 0 complete). Active: **Phase 1: flags and env only, one state file** — replace `./.env` and `config.env` with flags + `AGYD_*` env and one port-independent `state.json`.
+`PLAN-folder-isolation` (`ADR-006`; Phases 0-1 complete). Active: **Phase 2: no symlinks** — reject symlinks anywhere in `-workspace` or requested conversation folders.
 
-- [ ] Remove the `./.env` walk and `config.env` (`internal/config/layers.go`). Settings come from flags, falling back to `AGYD_*` env, then built-in defaults.
-- [ ] `state.json` is no longer keyed by port. It holds: the current conversation, the defaults (`PUT /v1/defaults` saves here instead of `config.env`), and per conversation its folder and settings.
-- [ ] `AGYD_STATE_DIR` sets the folder.
-- [ ] Atomic write: temp file + rename, mode 0600.
-- [ ] Restart test (unit and live): set defaults, create two conversations, `use` one, send SIGTERM, start again. The same current conversation, defaults and folders come back, and the next prompt continues the same conversation.
+- [ ] A symlink anywhere in a requested folder, or in `-workspace`, -> 400 `INVALID_CWD` (a startup error for `-workspace`). The message names the real path.
+- [ ] Tests first: a symlink at the end of the path, in the middle, and a real path that passes.
 - [ ] Checkpoint: change record, commit and push, handoff.
 
-Remaining phases: P2 no symlinks - P3 port 8080 then 3000 - P4b per-folder `agy acp` process (`cmd.Dir = folder`) - P5 `/clear` (new conversation, old kept in history) - P6 405 on web routes.
+Remaining phases: P3 port 8080 then 3000 - P4b per-folder `agy acp` process (`cmd.Dir = folder`) - P5 `/clear` (new conversation, old kept in history) - P6 405 on web routes.
 
 ## Next
 

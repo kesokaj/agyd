@@ -112,8 +112,7 @@ func (f *fakeAgyd) requests() []recordedRequest {
 	return slices.Clone(f.reqs)
 }
 
-// testCLIEnv points the client at addr through AGYD_HOST/AGYD_PORT with an
-// empty HOME, so no real config.env is read.
+// testCLIEnv points the client at addr through AGYD_HOST/AGYD_PORT.
 func testCLIEnv(t *testing.T, addr, stdin string, extraEnv map[string]string) (cliEnv, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	host, port, err := net.SplitHostPort(addr)
@@ -129,7 +128,6 @@ func testCLIEnv(t *testing.T, addr, stdin string, extraEnv map[string]string) (c
 		stdin: strings.NewReader(stdin), stdout: &stdout, stderr: &stderr,
 		getenv:     func(k string) string { return env[k] },
 		getwd:      func() (string, error) { return "/work/here", nil },
-		readFile:   os.ReadFile,
 		httpClient: &http.Client{},
 	}, &stdout, &stderr
 }
@@ -169,7 +167,7 @@ func TestCLICommandsHitTheirEndpoints(t *testing.T) {
 		{[]string{"models"}, "GET", "/v1/models", "application/json", "", []string{"* gemini-4-carbon", "  claude-sonnet-5-5", "* medium", "THINKING LEVELS"}},
 		{[]string{"defaults"}, "GET", "/v1/defaults", "application/json", "", []string{"thinking  high", "mode      (agy default)"}},
 		{[]string{"defaults", "--model", "gemini-4-carbon", "--mode", "plan"}, "PUT", "/v1/defaults", "application/json",
-			`{"model":"gemini-4-carbon","mode":"plan"}`, []string{"saved to config.env"}},
+			`{"model":"gemini-4-carbon","mode":"plan"}`, []string{"saved to state.json"}},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -410,8 +408,8 @@ func TestClientHelp(t *testing.T) {
 	}
 }
 
-// TestClientBaseURL covers D15: flag > shell env > config.env, never ./.env,
-// and an unspecified bind address dials loopback.
+// TestClientBaseURL covers ADR-006: flag > shell env > built-in default,
+// ignoring both config.env and ./.env, and dialing loopback for unspecified binds.
 func TestClientBaseURL(t *testing.T) {
 	home := t.TempDir()
 	cfgDir := filepath.Join(home, ".config", "agyd")
@@ -434,8 +432,8 @@ func TestClientBaseURL(t *testing.T) {
 		wantErr bool
 	}{
 		{"defaults", t.TempDir(), nil, cliOpts{}, "http://127.0.0.1:8080", false},
-		{"config.env, unspecified host dials loopback, ./.env ignored", home, nil, cliOpts{}, "http://127.0.0.1:7000", false},
-		{"shell env beats config.env", home, map[string]string{"AGYD_PORT": "9000"}, cliOpts{}, "http://127.0.0.1:9000", false},
+		{"config.env and ./.env ignored", home, nil, cliOpts{}, "http://127.0.0.1:8080", false},
+		{"shell env, unspecified host dials loopback", home, map[string]string{"AGYD_HOST": "0.0.0.0", "AGYD_PORT": "9000"}, cliOpts{}, "http://127.0.0.1:9000", false},
 		{"flags beat env", home, map[string]string{"AGYD_PORT": "9000"}, cliOpts{host: "localhost", port: "9100"}, "http://localhost:9100", false},
 		{"IPv6 unspecified dials ::1", t.TempDir(), map[string]string{"AGYD_HOST": "::"}, cliOpts{}, "http://[::1]:8080", false},
 		{"bracketed IPv6", t.TempDir(), nil, cliOpts{host: "[::1]"}, "http://[::1]:8080", false},
@@ -449,9 +447,8 @@ func TestClientBaseURL(t *testing.T) {
 				vals[k] = v
 			}
 			env := cliEnv{
-				getenv:   func(k string) string { return vals[k] },
-				getwd:    func() (string, error) { return project, nil },
-				readFile: os.ReadFile,
+				getenv: func(k string) string { return vals[k] },
+				getwd:  func() (string, error) { return project, nil },
 			}
 			got, err := clientBaseURL(&tt.opts, env)
 			if (err != nil) != tt.wantErr || got != tt.want {

@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"flag"
@@ -10,11 +9,8 @@ import (
 	"net"
 	"net/http"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
-
-	"agyd/internal/config"
 )
 
 // The agyd CLI (D8): bare `agyd` or `agyd serve` runs the server; the
@@ -26,14 +22,13 @@ type cliEnv struct {
 	stdout, stderr io.Writer
 	getenv         func(string) string
 	getwd          func() (string, error)
-	readFile       func(string) ([]byte, error)
 	httpClient     *http.Client
 }
 
 func osCLIEnv() cliEnv {
 	return cliEnv{
 		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
-		getenv: os.Getenv, getwd: os.Getwd, readFile: config.ReadEnvFile,
+		getenv: os.Getenv, getwd: os.Getwd,
 		httpClient: &http.Client{ // no timeout: ask streams; Ctrl-C cancels the context
 			// agyd never redirects; whatever else answers on the port must not
 			// steer a prompt to another host.
@@ -128,7 +123,7 @@ func clientUsage() string {
 	}
 	b.WriteString("\nEvery command prints the conversation, model and thinking level to stderr,\n")
 	b.WriteString("and takes --json (raw API response on stdout), --host and --port\n")
-	b.WriteString("(default: AGYD_HOST/AGYD_PORT from the shell or config.env, else 127.0.0.1:8080).\n")
+	b.WriteString("(default: AGYD_HOST/AGYD_PORT from the environment, else 127.0.0.1:8080).\n")
 	return b.String()
 }
 
@@ -223,22 +218,15 @@ func argCount(cmd cliCommand) string {
 	}
 }
 
-// clientBaseURL resolves where agyd listens (D15): --host/--port, then the
-// shell env, then config.env, never ./.env. An unspecified bind address
-// (0.0.0.0, ::) dials the loopback address of the same family.
+// clientBaseURL resolves where agyd listens (ADR-006): --host/--port, then
+// AGYD_HOST/AGYD_PORT in the environment, else 127.0.0.1:8080. An unspecified
+// bind address (0.0.0.0, ::) dials the loopback address of the same family.
 func clientBaseURL(o *cliOpts, env cliEnv) (string, error) {
-	fileVals, err := clientConfigEnv(env)
-	if err != nil {
-		return "", err
-	}
 	pick := func(flagVal, key, fallback string) string {
 		if flagVal != "" {
 			return flagVal
 		}
 		if v := env.getenv(key); v != "" {
-			return v
-		}
-		if v := fileVals[key]; v != "" {
 			return v
 		}
 		return fallback
@@ -260,22 +248,4 @@ func clientBaseURL(o *cliOpts, env cliEnv) (string, error) {
 		return "", fmt.Errorf("invalid port %q: want 1-65535", port)
 	}
 	return "http://" + net.JoinHostPort(host, port), nil
-}
-
-// clientConfigEnv reads AGYD_* keys from config.env; a missing file or an
-// unknown config dir is not an error.
-func clientConfigEnv(env cliEnv) (map[string]string, error) {
-	dir, err := config.Dir(env.getenv)
-	if err != nil {
-		return nil, nil
-	}
-	path := filepath.Join(dir, "config.env")
-	b, err := env.readFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, fmt.Errorf("read %s: %w", path, err)
-	}
-	return config.ParseEnv(bytes.NewReader(b), path)
 }

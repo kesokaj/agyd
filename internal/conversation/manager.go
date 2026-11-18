@@ -26,20 +26,19 @@ type Agent interface {
 	ResumeSession(ctx context.Context, sessionID, cwd string) (acp.SessionInfo, error)
 }
 
-// StateStore persists this instance's ConversationState.
+// StateStore persists state.json across restarts.
 type StateStore interface {
-	Load() (config.ConversationState, error)
-	Save(config.ConversationState) error
+	Load() (config.State, error)
+	Save(config.State) error
 }
 
 // Options configure a Manager.
 type Options struct {
-	Agent        Agent
-	State        StateStore
-	Log          *slog.Logger
-	Workspace    string               // cwd for conversations created without one
-	Defaults     Settings             // initial running defaults
-	SaveDefaults func(Settings) error // writes config.env; nil disables persisting
+	Agent     Agent
+	State     StateStore
+	Log       *slog.Logger
+	Workspace string   // cwd for conversations created without one
+	Defaults  Settings // startup defaults from flags/env (override saved defaults for this run)
 }
 
 // memo is what agyd remembers about a conversation to re-apply after resume.
@@ -50,21 +49,21 @@ type memo struct {
 
 // Manager is safe for concurrent use.
 type Manager struct {
-	agent        Agent
-	state        StateStore
-	log          *slog.Logger
-	workspace    string
-	saveDefaults func(Settings) error
+	agent           Agent
+	state           StateStore
+	log             *slog.Logger
+	workspace       string
+	startupDefaults Settings
 
-	opMu sync.Mutex // serializes pointer and settings changes (create, use, resume, update, delete)
+	opMu   sync.Mutex // serializes pointer and settings changes (create, use, resume, update, delete)
+	saveMu sync.Mutex // serializes state.json snapshots + writes (lock order: opMu -> saveMu -> mu)
 
-	defaultsMu sync.Mutex // serializes SetDefaults, so config.env's read-merge-write loses no key
-
-	mu       sync.Mutex // guards the fields below
-	current  string
-	defaults Settings
-	memos    map[string]memo
-	options  []acp.ConfigOption
+	mu            sync.Mutex // guards the fields below
+	current       string
+	defaults      Settings
+	savedDefaults Settings
+	memos         map[string]memo
+	options       []acp.ConfigOption
 }
 
 // CreateRequest describes a new conversation. Settings given here are strict:
@@ -82,7 +81,7 @@ func New(o Options) *Manager {
 	}
 	return &Manager{
 		agent: o.Agent, state: o.State, log: o.Log, workspace: o.Workspace,
-		saveDefaults: o.SaveDefaults, defaults: o.Defaults, memos: map[string]memo{},
+		startupDefaults: o.Defaults, defaults: o.Defaults, memos: map[string]memo{},
 	}
 }
 
@@ -93,18 +92,22 @@ func (m *Manager) CurrentID() string {
 	return m.current
 }
 
-// Startup resumes the conversation saved in the state file or creates a
-// fresh one. fresh reports which. Failures to read state or resume are
-// logged and fall back to a fresh conversation.
+// Startup loads defaults and conversations from state.json, then resumes the
+// current conversation or creates a fresh one. fresh reports which. Failures
+// to read state or resume are logged and fall back to a fresh conversation.
 func (m *Manager) Startup(ctx context.Context) (info acp.SessionInfo, fresh bool, err error) {
 	m.opMu.Lock()
 	defer m.opMu.Unlock()
-	st, err := m.state.Load()
-	if err != nil {
-		m.log.Warn("state file unreadable; starting a fresh conversation", "err", err)
+	var st config.State
+	if m.state != nil {
+		var lerr error
+		st, lerr = m.state.Load()
+		if lerr != nil {
+			m.log.Warn("state file unreadable; starting a fresh conversation", "err", lerr)
+		}
 	}
+	m.loadState(st)
 	if id := st.CurrentConversationID; id != "" {
-		m.remember(id, memo{cwd: st.Cwd, settings: Settings{Model: st.Model, ThinkingLevel: st.ThinkingLevel, Mode: st.Mode}})
 		info, err := m.use(ctx, id)
 		if err == nil {
 			return info, false, nil
@@ -188,6 +191,8 @@ func (m *Manager) create(ctx context.Context, req CreateRequest) (acp.SessionInf
 	m.remember(info.SessionID, memo{cwd: info.Cwd, settings: SettingsOf(info)})
 	if !req.NoUse {
 		m.setCurrent(info.SessionID)
+	} else {
+		m.persistState()
 	}
 	return info, nil
 }
@@ -203,6 +208,7 @@ func (m *Manager) Use(ctx context.Context, id string) (acp.SessionInfo, error) {
 func (m *Manager) use(ctx context.Context, id string) (acp.SessionInfo, error) {
 	if info, err := m.agent.GetSession(id); err == nil {
 		m.noteOptions(info.ConfigOptions)
+		m.remember(id, memo{cwd: info.Cwd, settings: SettingsOf(info)})
 		m.setCurrent(id)
 		return info, nil
 	}
@@ -216,6 +222,9 @@ func (m *Manager) use(ctx context.Context, id string) (acp.SessionInfo, error) {
 	}
 	info, err := m.agent.ResumeSession(ctx, id, mem.cwd)
 	if err != nil {
+		if errors.Is(err, acp.ErrSessionNotFound) && m.forget(id) {
+			m.persistState()
+		}
 		return acp.SessionInfo{}, err
 	}
 	want := m.Defaults()
@@ -273,9 +282,7 @@ func (m *Manager) Update(ctx context.Context, id string, s Settings) (acp.Sessio
 		return acp.SessionInfo{}, err
 	}
 	m.remember(info.SessionID, memo{cwd: info.Cwd, settings: SettingsOf(info)})
-	if m.CurrentID() == info.SessionID {
-		m.setCurrent(info.SessionID)
-	}
+	m.persistState()
 	return info, nil
 }
 
@@ -292,14 +299,15 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 		}
 	}
 	m.mu.Lock()
+	_, hadMemo := m.memos[id]
 	delete(m.memos, id)
 	cleared := m.current == id
 	if cleared {
 		m.current = ""
 	}
 	m.mu.Unlock()
-	if cleared {
-		m.saveState(config.ConversationState{})
+	if cleared || hadMemo {
+		m.persistState()
 	}
 	return nil
 }

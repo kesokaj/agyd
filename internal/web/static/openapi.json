@@ -883,11 +883,11 @@
         }
       },
       "put": {
-        "summary": "Set the defaults and save them to config.env",
+        "summary": "Set the defaults and save them to state.json",
         "tags": [
           "settings"
         ],
-        "description": "Merges the given fields into the running defaults (omitted fields keep their value) and writes AGYD_MODEL, AGYD_THINKING and AGYD_MODE to config.env in the agyd config directory. Each value must match ^[A-Za-z0-9._-]{1,64}$ and, once agy has reported its options, be one of them. Applies to conversations created or resumed afterwards.",
+        "description": "Merges the given fields into the running defaults (omitted fields keep their value) and saves them under defaults in state.json in AGYD_STATE_DIR (default ~/.config/agyd). Each value must match ^[A-Za-z0-9._-]{1,64}$ and, once agy has reported its options, be one of them. Applies to conversations created or resumed afterwards.",
         "requestBody": {
           "required": true,
           "content": {

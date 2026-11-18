@@ -57,21 +57,8 @@ func (m *Manager) List(ctx context.Context, cwd string) ([]Conversation, error) 
 	hist, err := m.agent.ListAgentSessions(ctx)
 	if err != nil {
 		m.log.Warn("agy session/list failed; listing live conversations only", "err", err)
-	}
-	cur := m.CurrentID()
-	for _, h := range hist {
-		c, ok := byID[h.SessionID]
-		if !ok {
-			c = &Conversation{ConversationID: h.SessionID, Cwd: h.Cwd, Current: h.SessionID == cur}
-			byID[h.SessionID] = c
-		}
-		if c.Title == "" {
-			c.Title = h.Title
-		}
-		if !h.UpdateTime.IsZero() {
-			t := h.UpdateTime
-			c.UpdateTime = &t
-		}
+	} else {
+		mergeHistory(byID, hist, m.memosSnapshot(), m.CurrentID())
 	}
 	out := make([]Conversation, 0, len(byID))
 	for _, c := range byID {
@@ -83,6 +70,32 @@ func (m *Manager) List(ctx context.Context, cwd string) ([]Conversation, error) 
 		return cmp.Or(-latest(a).Compare(latest(b)), cmp.Compare(a.ConversationID, b.ConversationID))
 	})
 	return out, nil
+}
+
+func mergeHistory(byID map[string]*Conversation, hist []acp.AgentSession, memos map[string]memo, cur string) {
+	for _, h := range hist {
+		c, ok := byID[h.SessionID]
+		if !ok {
+			folder := h.Cwd
+			if mem, known := memos[h.SessionID]; known && mem.cwd != "" {
+				folder = mem.cwd
+			}
+			c = &Conversation{ConversationID: h.SessionID, Cwd: folder, Current: h.SessionID == cur}
+			byID[h.SessionID] = c
+		}
+		if c.Title == "" {
+			c.Title = h.Title
+		}
+		if !h.UpdateTime.IsZero() {
+			t := h.UpdateTime
+			c.UpdateTime = &t
+		}
+	}
+	for id, mem := range memos {
+		if _, ok := byID[id]; !ok && mem.cwd != "" {
+			byID[id] = &Conversation{ConversationID: id, Cwd: mem.cwd, Current: id == cur}
+		}
+	}
 }
 
 // latest is the newer of a conversation's create and update times.

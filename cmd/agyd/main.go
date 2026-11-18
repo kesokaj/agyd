@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"agyd/internal/acp"
-	"agyd/internal/config"
 )
 
 func newLogger(w io.Writer) *slog.Logger {
@@ -92,7 +91,7 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 	errc := make(chan error, 1)
 	go func() { errc <- srv.Serve(ln) }()
 
-	log.Info("listening", "addr", cfg.Addr(), "url", localURL(cfg), "acpBin", cfg.ACPBin, "workspace", cfg.Workspace)
+	log.Info("listening", "addr", cfg.Addr(), "url", localURL(cfg), "acpBin", cfg.ACPBin, "workspace", cfg.Workspace, "stateDir", cfg.StateDir)
 
 	select {
 	case err := <-errc:
@@ -146,26 +145,13 @@ func serve(args []string) {
 	}
 }
 
-// loadServeConfig layers ./.env, the shell env and config.env (never touching
-// the process environment), then applies the flags.
+// loadServeConfig resolves configuration from flags and AGYD_* environment
+// variables only (ADR-006).
 func loadServeConfig(log *slog.Logger, args []string) (appConfig, error) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		return appConfig{}, fmt.Errorf("getting current directory: %w", err)
-	}
-	layers, err := config.Load(cwd, os.Getenv, config.ReadEnvFile)
-	if err != nil {
-		return appConfig{}, err
-	}
-	if len(layers.Ignored) > 0 {
-		log.Warn("ignoring keys a project .env may not set; put them in config.env or the shell env",
-			"file", layers.DotEnvFile, "keys", layers.Ignored)
-	}
-	cfg, err := loadConfig(args, layers.Getenv, func() (string, error) { return cwd, nil }, exec.LookPath)
+	cfg, err := loadConfig(args, os.Getenv, os.Getwd, exec.LookPath)
 	if err == nil {
-		cfg.ConfigDir = filepath.Dir(layers.ConfigFile)
 		log.Info("settings", "model", cfg.Model, "thinking", cfg.Thinking, "mode", cfg.Mode,
-			"configFile", layers.ConfigFile, "dotEnvFile", layers.DotEnvFile)
+			"stateFile", filepath.Join(cfg.StateDir, "state.json"))
 	}
 	return cfg, err
 }

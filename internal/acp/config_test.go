@@ -3,6 +3,8 @@ package acp
 import (
 	"encoding/json"
 	"errors"
+	"os"
+	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -115,6 +117,17 @@ func TestListAndResumeAgentSessions(t *testing.T) {
 	}
 	if _, err := c.ResumeSession(ctx, "hist_2", "relative"); !errors.Is(err, ErrInvalidConfig) {
 		t.Errorf("resume with a bad cwd err = %v, want ErrInvalidConfig", err)
+	}
+	gemDir := filepath.Join(t.TempDir(), ".gemini")
+	if err := os.MkdirAll(gemDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	sneaky := filepath.Join(t.TempDir(), "sneaky")
+	if err := os.Symlink(gemDir, sneaky); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.ResumeSession(ctx, "hist_2", sneaky); !errors.Is(err, ErrInvalidConfig) {
+		t.Errorf("resume with symlink to .gemini err = %v, want ErrInvalidConfig", err)
 	}
 }
 

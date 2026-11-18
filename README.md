@@ -143,7 +143,7 @@ curl -X DELETE "http://127.0.0.1:8080/v1/conversations/$ID"
 | `POST` | `/v1/conversations/{id}/use` | Make it current (resumes it if it is not live) |
 | `GET` | `/v1/models` | Models, thinking levels and modes agy offers |
 | `GET` | `/v1/defaults` | Defaults for new conversations |
-| `PUT` | `/v1/defaults` | Change the defaults and save them to `config.env` |
+| `PUT` | `/v1/defaults` | Change the defaults and save them to `state.json` |
 
 > [!NOTE]
 > Before ADR-005 these paths were `/v1/sessions/...` with a `sessionId` field. They are now `/v1/conversations/...` and `conversationId`; the old paths return `404`.
@@ -173,11 +173,11 @@ Every error has the same shape (Google AIP-193):
 
 ## Configuration
 
-Each setting can come from a flag, a project `.env`, your shell, or your config file. Highest wins:
+Each setting comes from flags, environment variables, saved defaults in `state.json`, or built-in defaults. Highest wins:
 
 ```mermaid
 flowchart LR
-  F["flags"] --> D["./.env<br/>(model, thinking only)"] --> E["shell env"] --> C["~/.config/agyd/config.env"]
+  F["flags"] --> E["shell env<br/>(AGYD_*)"] --> S["state.json<br/>(saved defaults)"] --> D["built-in defaults"]
 ```
 
 | Flag | Env var | Default | What it does |
@@ -189,16 +189,15 @@ flowchart LR
 | `-host` | `AGYD_HOST` | `127.0.0.1` | Listen address: an IP or `localhost`. `0.0.0.0` listens on all IPv4 interfaces, `::` on all IPv6 ones (see [Safety](#safety)) |
 | `-port` | `AGYD_PORT` | `8080` | Listen port |
 | `-workspace` | `AGYD_WORKSPACE` | current folder | Default folder for new conversations |
+| `-state-dir` | `AGYD_STATE_DIR` | `~/.config/agyd` | Directory holding `state.json` (must be absolute) |
 | `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for agent tool calls |
 | `-agy` | `AGYD_AGY` | `agy` | Path to the `agy` binary |
 | `-acp-args` | `AGYD_ACP_ARGS` | `acp` | Arguments passed to `agy` |
 
-- **`config.env`** lives in `$XDG_CONFIG_HOME/agyd/`, else `~/.config/agyd/`. The startup question, `agyd defaults --model ...` and `PUT /v1/defaults` write `AGYD_MODEL`, `AGYD_THINKING` and `AGYD_MODE` there and leave your other lines alone. You can put any `AGYD_*` setting in it by hand.
-- **A project's `.env`** (the nearest one walking up from the folder you start in, stopping at your home folder) may set only `AGYD_MODEL` and `AGYD_THINKING`. Other `AGYD_*` keys there, `AGYD_MODE` included, are ignored with a warning, so a cloned repository cannot change which binary agyd runs, where it listens, its permission policy, or switch agents to `accept-edits`. agyd reads it only if it is a regular file of at most 1 MiB, never writes it, and never passes it to agy.
-- **The `.env` wins over your shell.** That is the reverse of the usual dotenv habit, on purpose: a project can pin its model even if your shell sets another.
-- **The startup question** appears only in a terminal and only when no layer sets a model. `-no-prompt`, or starting without a terminal, uses agy's default.
-- **`state.json`** in the same folder remembers the current conversation per port, so a restart resumes it. If agy no longer has it, agyd starts a fresh one and logs a warning.
-- **The CLI** finds the server through `--host`/`--port`, then `AGYD_HOST`/`AGYD_PORT` in your shell, then `config.env` (never a project `.env`). `0.0.0.0` dials `127.0.0.1`.
+- **`state.json`** lives in `AGYD_STATE_DIR` (must be an absolute path when set), else `$XDG_CONFIG_HOME/agyd/` (when absolute), else `~/.config/agyd/`. It is flat (no longer keyed by port), holding `currentConversationId`, `defaults` (`model`, `thinkingLevel`, `mode`), and `conversations` (remembered folders and settings). It is written atomically via temp file + sync + rename with mode `0600` (directory `0700`) and read non-blocking (`O_NONBLOCK`) as a regular file capped at 4 MiB.
+- **Saved defaults** in `state.json` are written by the startup question, `agyd defaults --model ...`, and `PUT /v1/defaults`. Startup flags or env vars override saved defaults for the running process without overwriting `state.json` on disk.
+- **The startup question** appears only in an interactive terminal when no flag, env var, or saved default sets a model. `-no-prompt`, or starting without a terminal, skips the question and uses agy's default.
+- **The CLI** finds the server through `--host`/`--port`, then `AGYD_HOST`/`AGYD_PORT` in your shell, falling back to `127.0.0.1:8080` (neither `config.env` nor `./.env` are read). `0.0.0.0` dials `127.0.0.1`.
 
 ```bash
 agyd -port 9090 -workspace ~/code/sandbox -permission-policy deny_all
@@ -213,6 +212,14 @@ agyd -host 0.0.0.0 -port 8080
 
 Then open `http://<your-machine-ip>:8080/docs` from the other device, or run `agyd ask --host <your-machine-ip> "..."` there. At startup agyd logs a warning listing the addresses it accepts: your machine's IPs and its hostname. macOS may ask whether to allow incoming connections.
 
+### Running in a container
+
+To run `agyd` inside a container:
+
+- **Configure via `AGYD_*` env vars:** set `AGYD_HOST=0.0.0.0` to accept external traffic, configure `AGYD_STATE_DIR=/data/state`, and provide any model or mode flags. Non-TTY stdin automatically skips the startup picker. Logs stream as structured JSON on stdout, and `SIGTERM` stops the server cleanly with state already synced to disk.
+- **Persist two directories:** mount host volumes or named volumes for `AGYD_STATE_DIR` (or `~/.config/agyd`, storing `state.json`) and `~/.gemini` (where `agy` stores login credentials and history).
+- **Pass `--init`:** run containers with `docker run --init ...` (or equivalent init process like tini) so `agy` child processes are properly reaped when `agyd` runs as PID 1.
+
 ## Safety
 
 `agyd` is built for **one person on their own machine**.
@@ -223,7 +230,7 @@ Then open `http://<your-machine-ip>:8080/docs` from the other device, or run `ag
 - **Loopback by default.** Remote access only happens when you pass `-host`.
 - **Host check.** Requests must name `localhost`, `127.0.0.1` or `::1`, or (with `-host`) one of your machine's own IPs or its hostname. Anything else gets `403`. This blocks DNS-rebinding attacks.
 - **CSRF protection.** Browser requests from other websites are blocked.
-- **No token.** There is no API key. The protection is the bind address plus the two checks above. Anyone who passes them can also list your agy conversations (titles included), switch the current one, and change your saved defaults in `config.env`.
+- **No token.** There is no API key. The protection is the bind address plus the two checks above. Anyone who passes them can also list your agy conversations (titles included), switch the current one, and change your saved defaults in `state.json`.
 - **`deny_all` is not a sandbox.** It answers only the permission requests agy sends, and agy decides whether to send them from its own settings (`toolPermission` in `~/.gemini/antigravity-cli/settings.json`). With `always-proceed`, live checks (agy 1.5.11) saw reads, edits, shell commands and writes outside the workspace run with no request at all; `accept-edits` writes without asking by design. Every request agyd does answer is logged as a `permission decision` line. Run agyd in a folder you are willing to have changed.
 
 ## Troubleshooting

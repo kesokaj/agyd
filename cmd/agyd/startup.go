@@ -17,40 +17,25 @@ import (
 const startupTimeout = 60 * time.Second
 
 // wantPicker reports whether to ask for the default model at startup (D4):
-// only on a terminal, with agy ready, when no layer set AGYD_MODEL and the
-// operator did not pass -no-prompt.
-func wantPicker(cfg appConfig, tty, agyReady bool) bool {
-	return tty && agyReady && cfg.Model == "" && !cfg.NoPrompt
+// only on a terminal, with agy ready, when neither flags/env nor state.json
+// set a default model and the operator did not pass -no-prompt.
+func wantPicker(cfg appConfig, effectiveModel string, tty, agyReady bool) bool {
+	return tty && agyReady && cfg.Model == "" && effectiveModel == "" && !cfg.NoPrompt
 }
 
-// stdinIsTerminal reports whether stdin is a character device.
+// stdinIsTerminal reports whether stdin is an interactive terminal (not /dev/null).
 func stdinIsTerminal() bool {
-	fi, err := os.Stdin.Stat()
-	return err == nil && fi.Mode()&os.ModeCharDevice != 0
-}
-
-// configEnvWriter persists the given (non-empty) settings to config.env.
-func configEnvWriter(path string) func(conversation.Settings) error {
-	return func(s conversation.Settings) error {
-		updates := map[string]string{}
-		for key, v := range map[string]string{"AGYD_MODEL": s.Model, "AGYD_THINKING": s.ThinkingLevel, "AGYD_MODE": s.Mode} {
-			if v != "" {
-				updates[key] = v
-			}
-		}
-		return config.WriteConfigEnv(path, updates)
-	}
+	return fileIsTerminal(os.Stdin)
 }
 
 // newManager builds the conversation Manager for this instance.
 func newManager(log *slog.Logger, cfg appConfig, agent conversation.Agent) *conversation.Manager {
 	return conversation.New(conversation.Options{
-		Agent:        agent,
-		State:        config.NewStateStore(cfg.ConfigDir, cfg.Port),
-		Log:          log,
-		Workspace:    cfg.Workspace,
-		Defaults:     conversation.Settings{Model: cfg.Model, ThinkingLevel: cfg.Thinking, Mode: cfg.Mode},
-		SaveDefaults: configEnvWriter(filepath.Join(cfg.ConfigDir, "config.env")),
+		Agent:     agent,
+		State:     config.NewStateStore(cfg.StateDir),
+		Log:       log,
+		Workspace: cfg.Workspace,
+		Defaults:  conversation.Settings{Model: cfg.Model, ThinkingLevel: cfg.Thinking, Mode: cfg.Mode},
 	})
 }
 
@@ -64,14 +49,15 @@ func startConversation(ctx context.Context, log *slog.Logger, cfg appConfig, mgr
 	if err != nil {
 		log.Warn("no conversation at startup; the first request will create one", "err", err)
 	}
-	if !wantPicker(cfg, tty, err == nil) {
-		if cfg.Model == "" {
+	effectiveModel := mgr.Defaults().Model
+	if !wantPicker(cfg, effectiveModel, tty, err == nil) {
+		if effectiveModel == "" {
 			log.Info("no default model configured; using agy's default", "model", conversation.SettingsOf(info).Model)
 		}
 		logConversation(log, info.SessionID, conversation.SettingsOf(info), fresh)
 		return
 	}
-	s, save, ok := pickInterruptibly(ctx, in, out, info.ConfigOptions, filepath.Join(cfg.ConfigDir, "config.env"))
+	s, save, ok := pickInterruptibly(ctx, in, out, info.ConfigOptions, filepath.Join(cfg.StateDir, "state.json"))
 	if !ok || s.IsZero() {
 		return
 	}

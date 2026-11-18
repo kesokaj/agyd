@@ -7,7 +7,6 @@ import (
 	"testing"
 
 	"agyd/internal/acp"
-	"agyd/internal/config"
 	"agyd/internal/conversation"
 )
 
@@ -36,11 +35,11 @@ func TestPickDefaults(t *testing.T) {
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
 			var out strings.Builder
-			got, save := pickDefaults(strings.NewReader(c.input), &out, pickerOptions(), "/cfg/config.env")
+			got, save := pickDefaults(strings.NewReader(c.input), &out, pickerOptions(), "/cfg/state.json")
 			if got != c.want || save != c.save {
 				t.Errorf("pickDefaults = %+v, save=%v; want %+v, save=%v\n%s", got, save, c.want, c.save, out.String())
 			}
-			for _, s := range []string{"Gemini 4 Carbon", "claude-sonnet-5-5", "/cfg/config.env", "[Y/n]"} {
+			for _, s := range []string{"Gemini 4 Carbon", "claude-sonnet-5-5", "/cfg/state.json", "[Y/n]"} {
 				if !strings.Contains(out.String(), s) {
 					t.Errorf("prompt lacks %q:\n%s", s, out.String())
 				}
@@ -51,7 +50,7 @@ func TestPickDefaults(t *testing.T) {
 
 func TestPickDefaultsWithoutOptions(t *testing.T) {
 	var out strings.Builder
-	got, save := pickDefaults(strings.NewReader("1\n"), &out, nil, "/cfg/config.env")
+	got, save := pickDefaults(strings.NewReader("1\n"), &out, nil, "/cfg/state.json")
 	if !got.IsZero() || save {
 		t.Errorf("pickDefaults with no options = %+v, %v; want nothing", got, save)
 	}
@@ -59,40 +58,56 @@ func TestPickDefaultsWithoutOptions(t *testing.T) {
 
 func TestWantPicker(t *testing.T) {
 	for _, c := range []struct {
-		name  string
-		cfg   appConfig
-		tty   bool
-		ready bool
-		want  bool
+		name           string
+		cfg            appConfig
+		effectiveModel string
+		tty            bool
+		ready          bool
+		want           bool
 	}{
-		{"tty, nothing set", appConfig{}, true, true, true},
-		{"no tty", appConfig{}, false, true, false},
-		{"model set", appConfig{Model: "m"}, true, true, false},
-		{"-no-prompt", appConfig{NoPrompt: true}, true, true, false},
-		{"agy not ready", appConfig{}, true, false, false},
+		{"tty, nothing set", appConfig{}, "", true, true, true},
+		{"no tty", appConfig{}, "", false, true, false},
+		{"flag or env model set", appConfig{Model: "m"}, "m", true, true, false},
+		{"saved model in state.json skips picker", appConfig{}, "claude-sonnet-5-5", true, true, false},
+		{"-no-prompt", appConfig{NoPrompt: true}, "", true, true, false},
+		{"agy not ready", appConfig{}, "", true, false, false},
 	} {
-		if got := wantPicker(c.cfg, c.tty, c.ready); got != c.want {
+		if got := wantPicker(c.cfg, c.effectiveModel, c.tty, c.ready); got != c.want {
 			t.Errorf("%s: wantPicker = %v, want %v", c.name, got, c.want)
 		}
 	}
 }
 
-func TestConfigEnvWriterSavesOnlyGivenKeys(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "agyd", "config.env")
-	save := configEnvWriter(path)
-	if err := save(conversation.Settings{Model: "claude-sonnet-5-5", ThinkingLevel: "high"}); err != nil {
-		t.Fatalf("save: %v", err)
-	}
-	f, err := os.Open(path)
+func TestFileIsTerminal(t *testing.T) {
+	devNull, err := os.Open(os.DevNull)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
-	got, err := config.ParseEnv(f, path)
+	defer func() { _ = devNull.Close() }()
+	if fileIsTerminal(devNull) {
+		t.Error("fileIsTerminal(/dev/null) = true, want false")
+	}
+
+	r, w, err := os.Pipe()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got) != 2 || got["AGYD_MODEL"] != "claude-sonnet-5-5" || got["AGYD_THINKING"] != "high" {
-		t.Errorf("config.env = %v", got)
+	defer func() { _ = r.Close(); _ = w.Close() }()
+	if fileIsTerminal(r) {
+		t.Error("fileIsTerminal(pipe) = true, want false")
+	}
+
+	reg, err := os.Create(filepath.Join(t.TempDir(), "plain"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reg.Close() }()
+	if fileIsTerminal(reg) {
+		t.Error("fileIsTerminal(regular file) = true, want false")
+	}
+
+	tty := openTestTTY(t)
+	if !fileIsTerminal(tty) {
+		t.Errorf("fileIsTerminal(%s) = false, want true", tty.Name())
 	}
 }

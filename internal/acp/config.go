@@ -160,6 +160,9 @@ func (c *Client) ResumeSession(ctx context.Context, sessionID, cwd string) (Sess
 	if !IsValidCwd(cwd) {
 		return SessionInfo{}, fmt.Errorf("%w: cwd %q must be a clean absolute path outside .gemini", ErrInvalidConfig, cwd)
 	}
+	if resolvesIntoDotGemini(cwd) {
+		return SessionInfo{}, fmt.Errorf("%w: cwd %q must not resolve into .gemini", ErrInvalidConfig, cwd)
+	}
 	if err := c.ensureReady(ctx); err != nil {
 		return SessionInfo{}, err
 	}

@@ -41,7 +41,7 @@ func (s *server) handleGetDefaults(w http.ResponseWriter, _ *http.Request) error
 }
 
 // handlePutDefaults merges the given settings into the running defaults and
-// writes them to config.env (D7, D13). Values are validated before the file
+// persists them to state.json (ADR-006). Values are validated before the file
 // is touched; omitted fields keep their value.
 func (s *server) handlePutDefaults(w http.ResponseWriter, r *http.Request) error {
 	var req settingsRequest

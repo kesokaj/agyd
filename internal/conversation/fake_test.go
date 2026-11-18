@@ -196,27 +196,46 @@ func (f *fakeAgent) restart() {
 // memState is an in-memory StateStore.
 type memState struct {
 	mu      sync.Mutex
-	st      config.ConversationState
+	st      config.State
 	loadErr error
+	saveErr error
+	onSave  func(config.State)
 	saves   int
 }
 
-func (m *memState) Load() (config.ConversationState, error) {
+func (m *memState) Load() (config.State, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.st, m.loadErr
+	return cloneState(m.st), m.loadErr
 }
 
-func (m *memState) Save(st config.ConversationState) error {
+func (m *memState) Save(st config.State) error {
+	if m.onSave != nil {
+		m.onSave(st)
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.st = st
+	if m.saveErr != nil {
+		return m.saveErr
+	}
+	m.st = cloneState(st)
 	m.saves++
 	return nil
 }
 
-func (m *memState) get() config.ConversationState {
+func (m *memState) get() config.State {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.st
+	return cloneState(m.st)
+}
+
+func cloneState(st config.State) config.State {
+	if st.Conversations != nil {
+		cp := make(map[string]config.ConversationRecord, len(st.Conversations))
+		for k, v := range st.Conversations {
+			cp[k] = v
+		}
+		st.Conversations = cp
+	}
+	return st
 }

@@ -34,7 +34,6 @@ type harness struct {
 	agent *fakeAgent
 	state *memState
 	logs  *syncBuffer
-	saved []Settings
 }
 
 func newHarness(t *testing.T, defaults Settings) *harness {
@@ -46,10 +45,6 @@ func newHarness(t *testing.T, defaults Settings) *harness {
 		Log:       slog.New(slog.NewTextHandler(h.logs, nil)),
 		Workspace: "/ws",
 		Defaults:  defaults,
-		SaveDefaults: func(s Settings) error {
-			h.saved = append(h.saved, s)
-			return nil
-		},
 	})
 	return h
 }
@@ -64,8 +59,12 @@ func TestStartupCreatesAndSavesState(t *testing.T) {
 		t.Errorf("startup conversation = %+v; want cwd /ws and the default model applied", info)
 	}
 	st := h.state.get()
-	if st.CurrentConversationID != info.SessionID || st.Cwd != "/ws" || st.Model != "claude-sonnet-5-5" || st.ThinkingLevel != "medium" {
+	rec := st.Conversations[info.SessionID]
+	if st.CurrentConversationID != info.SessionID || rec.Cwd != "/ws" || rec.Model != "claude-sonnet-5-5" || rec.ThinkingLevel != "medium" {
 		t.Errorf("state = %+v", st)
+	}
+	if st.Defaults != (config.Settings{}) {
+		t.Errorf("startup flag/env defaults leaked into persisted state.Defaults: %+v", st.Defaults)
 	}
 	if h.m.CurrentID() != info.SessionID {
 		t.Errorf("CurrentID = %q", h.m.CurrentID())
@@ -74,20 +73,48 @@ func TestStartupCreatesAndSavesState(t *testing.T) {
 
 func TestStartupResumesFromStateAndReappliesSettings(t *testing.T) {
 	h := newHarness(t, Settings{ThinkingLevel: "low"})
-	h.state.st = config.ConversationState{CurrentConversationID: "h1", Cwd: "/hist/one", ThinkingLevel: "high", Mode: "plan"}
+	h.state.st = config.State{
+		CurrentConversationID: "h1",
+		Defaults:              config.Settings{Model: "claude-sonnet-5-5", ThinkingLevel: "high"},
+		Conversations: map[string]config.ConversationRecord{
+			"h1":    {Cwd: "/hist/override", ThinkingLevel: "high", Mode: "plan"},
+			"unlit": {Cwd: "/unprompted/dir", Mode: "plan"},
+		},
+	}
 	info, fresh, err := h.m.Startup(t.Context())
 	if err != nil || fresh || info.SessionID != "h1" {
 		t.Fatalf("Startup = %+v, fresh=%v, err=%v; want h1 resumed", info, fresh, err)
 	}
-	if info.Setting(acp.ConfigThinking) != "high" || info.Setting(acp.ConfigMode) != "plan" {
-		t.Errorf("settings after resume = %q/%q; want the remembered high/plan, not agy's reset", info.Setting(acp.ConfigThinking), info.Setting(acp.ConfigMode))
+	if info.Cwd != "/hist/override" || info.Setting(acp.ConfigModel) != "claude-sonnet-5-5" ||
+		info.Setting(acp.ConfigThinking) != "high" || info.Setting(acp.ConfigMode) != "plan" {
+		t.Errorf("resumed info = %+v; want /hist/override, saved default model, and remembered high/plan", info)
+	}
+	// Startup flag/env ThinkingLevel=low overrides saved high for running defaults without clobbering state.json.
+	if got := h.m.Defaults(); got != (Settings{Model: "claude-sonnet-5-5", ThinkingLevel: "low"}) {
+		t.Errorf("running Defaults = %+v, want saved model + startup thinking override", got)
+	}
+	st := h.state.get()
+	if st.Defaults != (config.Settings{Model: "claude-sonnet-5-5", ThinkingLevel: "high"}) {
+		t.Errorf("saved Defaults clobbered = %+v", st.Defaults)
+	}
+	if st.Conversations["unlit"].Cwd != "/unprompted/dir" {
+		t.Errorf("non-current conversation lost from state.json: %+v", st.Conversations)
+	}
+	list, err := h.m.List(t.Context(), "/unprompted/dir")
+	if err != nil || len(list) != 1 || list[0].ConversationID != "unlit" {
+		t.Errorf("List(/unprompted/dir) = %+v, %v; want remembered unprompted conversation", list, err)
 	}
 }
 
 func TestStartupFallsBackToFresh(t *testing.T) {
 	for name, setup := range map[string]func(*harness){
-		"missing conversation": func(h *harness) { h.state.st = config.ConversationState{CurrentConversationID: "gone", Cwd: "/x"} },
-		"corrupt state":        func(h *harness) { h.state.loadErr = errors.New("state: corrupt") },
+		"missing conversation": func(h *harness) {
+			h.state.st = config.State{
+				CurrentConversationID: "gone",
+				Conversations:         map[string]config.ConversationRecord{"gone": {Cwd: "/x"}},
+			}
+		},
+		"corrupt state": func(h *harness) { h.state.loadErr = errors.New("state: corrupt") },
 	} {
 		t.Run(name, func(t *testing.T) {
 			h := newHarness(t, Settings{})
@@ -95,6 +122,9 @@ func TestStartupFallsBackToFresh(t *testing.T) {
 			info, fresh, err := h.m.Startup(t.Context())
 			if err != nil || !fresh || !strings.HasPrefix(info.SessionID, "new_") {
 				t.Fatalf("Startup = %+v, fresh=%v, err=%v; want a fresh conversation", info, fresh, err)
+			}
+			if _, stillThere := h.state.get().Conversations["gone"]; stillThere {
+				t.Errorf("stale conversation 'gone' kept in state.json: %+v", h.state.get())
 			}
 			if !strings.Contains(h.logs.String(), "level=WARN") {
 				t.Errorf("no warning logged:\n%s", h.logs)
@@ -180,7 +210,7 @@ func TestUseSwitchesAndResumes(t *testing.T) {
 	if r, _ := h.m.Resolve(t.Context(), ""); r.SessionID != "h2" {
 		t.Errorf("Resolve after use = %q, want h2", r.SessionID)
 	}
-	if st := h.state.get(); st.CurrentConversationID != "h2" || st.Cwd != "/hist/two" {
+	if st := h.state.get(); st.CurrentConversationID != "h2" || st.Conversations["h2"].Cwd != "/hist/two" {
 		t.Errorf("state = %+v", st)
 	}
 	if _, err := h.m.Use(t.Context(), "nope"); !errors.Is(err, acp.ErrSessionNotFound) {
@@ -211,6 +241,10 @@ func TestCreateSettingsAreStrict(t *testing.T) {
 	if h.m.CurrentID() != first.SessionID {
 		t.Errorf("NoUse create moved the pointer to %q", h.m.CurrentID())
 	}
+	st := h.state.get()
+	if st.CurrentConversationID != first.SessionID || st.Conversations[other.SessionID].Cwd != "/other" {
+		t.Errorf("NoUse create did not persist conversation folder in state.json: %+v", st)
+	}
 }
 
 func TestUpdateAndDelete(t *testing.T) {
@@ -223,7 +257,7 @@ func TestUpdateAndDelete(t *testing.T) {
 		t.Errorf("empty Update err = %v, want ErrInvalidSetting", err)
 	}
 	got, err := h.m.Update(t.Context(), "", Settings{ThinkingLevel: "high"})
-	if err != nil || got.Setting(acp.ConfigThinking) != "high" || h.state.get().ThinkingLevel != "high" {
+	if err != nil || got.Setting(acp.ConfigThinking) != "high" || h.state.get().Conversations[info.SessionID].ThinkingLevel != "high" {
 		t.Fatalf("Update = %+v, %v; state %+v", got, err, h.state.get())
 	}
 	h.agent.busy[info.SessionID] = true
@@ -237,8 +271,9 @@ func TestUpdateAndDelete(t *testing.T) {
 	if err := h.m.Delete(t.Context(), info.SessionID); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if h.m.CurrentID() != "" || h.state.get().CurrentConversationID != "" {
-		t.Errorf("pointer not cleared: %q, state %+v", h.m.CurrentID(), h.state.get())
+	st := h.state.get()
+	if h.m.CurrentID() != "" || st.CurrentConversationID != "" || len(st.Conversations) != 0 {
+		t.Errorf("pointer/record not cleared: %q, state %+v", h.m.CurrentID(), st)
 	}
 	if _, err := h.m.Current(t.Context()); !errors.Is(err, ErrNoCurrent) {
 		t.Errorf("Current after delete err = %v, want ErrNoCurrent", err)
@@ -259,6 +294,7 @@ func TestDefaultsAndModels(t *testing.T) {
 	if _, _, err := h.m.Startup(t.Context()); err != nil {
 		t.Fatal(err)
 	}
+	savesAfterStartup := h.state.saves
 	models, err := h.m.Models()
 	if err != nil || len(models) != 3 {
 		t.Fatalf("Models = %+v, %v", models, err)
@@ -269,21 +305,32 @@ func TestDefaultsAndModels(t *testing.T) {
 	if _, err := h.m.SetDefaults(Settings{}, true); !errors.Is(err, ErrInvalidSetting) {
 		t.Errorf("SetDefaults(empty) err = %v, want ErrInvalidSetting", err)
 	}
-	if len(h.saved) != 0 {
-		t.Fatalf("refused defaults were saved: %v", h.saved)
+	if h.state.saves != savesAfterStartup {
+		t.Fatalf("refused defaults wrote state.json (%d -> %d)", savesAfterStartup, h.state.saves)
 	}
+
 	got, err := h.m.SetDefaults(Settings{ThinkingLevel: "high"}, true)
 	if err != nil || got != (Settings{Model: "gemini-4-carbon", ThinkingLevel: "high"}) {
 		t.Fatalf("SetDefaults = %+v, %v", got, err)
 	}
-	if len(h.saved) != 1 || h.saved[0] != (Settings{ThinkingLevel: "high"}) {
-		t.Errorf("saved = %v; want only the changed key", h.saved)
+	if st := h.state.get(); st.Defaults != (config.Settings{ThinkingLevel: "high"}) {
+		t.Errorf("state.json defaults = %+v; want only persisted ThinkingLevel=high", st.Defaults)
 	}
-	if _, err := h.m.SetDefaults(Settings{Mode: "plan"}, false); err != nil || len(h.saved) != 1 {
-		t.Errorf("persist=false wrote config.env: %v, %v", h.saved, err)
+
+	savesBeforeNoPersist := h.state.saves
+	if _, err := h.m.SetDefaults(Settings{Mode: "plan"}, false); err != nil || h.state.saves != savesBeforeNoPersist {
+		t.Errorf("persist=false wrote state.json: saves=%d (want %d), err=%v", h.state.saves, savesBeforeNoPersist, err)
 	}
-	if h.m.Defaults().Mode != "plan" {
-		t.Errorf("Defaults = %+v", h.m.Defaults())
+	if h.m.Defaults().Mode != "plan" || h.state.get().Defaults.Mode != "" {
+		t.Errorf("Defaults = %+v, state.Defaults = %+v", h.m.Defaults(), h.state.get().Defaults)
+	}
+
+	h.state.saveErr = errors.New("disk full")
+	if _, err := h.m.SetDefaults(Settings{Model: "claude-sonnet-5-5"}, true); err == nil {
+		t.Fatal("SetDefaults with saveErr returned nil")
+	}
+	if h.m.Defaults().Model != "gemini-4-carbon" {
+		t.Errorf("failed Save mutated running Defaults: %+v", h.m.Defaults())
 	}
 }
 
@@ -331,5 +378,22 @@ func TestConcurrentUseAndPrompt(t *testing.T) {
 	wg.Wait()
 	if h.m.CurrentID() != "h1" {
 		t.Errorf("CurrentID = %q, want h1", h.m.CurrentID())
+	}
+}
+
+func TestStartupNilStateAndSettingsOfSanitizes(t *testing.T) {
+	m := New(Options{Agent: newFakeAgent(), Workspace: "/work"})
+	info, fresh, err := m.Startup(t.Context())
+	if err != nil || !fresh || info.SessionID == "" {
+		t.Fatalf("Startup with nil State = %+v, fresh=%v, err=%v", info, fresh, err)
+	}
+
+	got := SettingsOf(acp.SessionInfo{ConfigOptions: []acp.ConfigOption{
+		{ID: acp.ConfigModel, CurrentValue: "bad/model:1"},
+		{ID: acp.ConfigThinking, CurrentValue: "high"},
+		{ID: acp.ConfigMode, CurrentValue: "plan mode"},
+	}})
+	if got != (Settings{ThinkingLevel: "high"}) {
+		t.Errorf("SettingsOf sanitized = %+v, want {ThinkingLevel:high}", got)
 	}
 }

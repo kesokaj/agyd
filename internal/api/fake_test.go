@@ -265,7 +265,7 @@ type testEnv struct {
 	h         http.Handler
 	svc       *fakeACPService
 	mgr       *conversation.Manager
-	configEnv string // path PUT /v1/defaults writes
+	stateFile string // path PUT /v1/defaults writes
 }
 
 func newTestEnv(t *testing.T) *testEnv {
@@ -273,23 +273,13 @@ func newTestEnv(t *testing.T) *testEnv {
 	dir := t.TempDir()
 	svc := newFakeACPService()
 	log := discardLog()
-	path := filepath.Join(dir, "config.env")
 	mgr := conversation.New(conversation.Options{
 		Agent:     svc,
-		State:     config.NewStateStore(dir, 8080),
+		State:     config.NewStateStore(dir),
 		Log:       log,
 		Workspace: "/workspace",
-		SaveDefaults: func(s conversation.Settings) error {
-			updates := map[string]string{}
-			for k, v := range map[string]string{"AGYD_MODEL": s.Model, "AGYD_THINKING": s.ThinkingLevel, "AGYD_MODE": s.Mode} {
-				if v != "" {
-					updates[k] = v
-				}
-			}
-			return config.WriteConfigEnv(path, updates)
-		},
 	})
-	return &testEnv{h: NewHandler(log, svc, mgr, Config{DefaultWorkspace: "/workspace"}), svc: svc, mgr: mgr, configEnv: path}
+	return &testEnv{h: NewHandler(log, svc, mgr, Config{DefaultWorkspace: "/workspace"}), svc: svc, mgr: mgr, stateFile: filepath.Join(dir, "state.json")}
 }
 
 // do serves one request; body "" sends none.
