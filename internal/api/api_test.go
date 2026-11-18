@@ -166,6 +166,18 @@ func (f *fakeACPService) Cancel(_ context.Context, sessionID string) error {
 
 func (f *fakeACPService) Close() error { return nil }
 
+func (f *fakeACPService) SetConfigOption(_ context.Context, sessionID, _, _ string) (acp.SessionInfo, error) {
+	return f.GetSession(sessionID)
+}
+
+func (f *fakeACPService) ListAgentSessions(_ context.Context) ([]acp.AgentSession, error) {
+	return nil, nil
+}
+
+func (f *fakeACPService) ResumeSession(_ context.Context, sessionID, _ string) (acp.SessionInfo, error) {
+	return f.GetSession(sessionID)
+}
+
 func newTestMux(svc acp.Service) http.Handler {
 	log := slog.New(slog.NewJSONHandler(io.Discard, nil))
 	return NewHandler(log, svc, Config{DefaultWorkspace: "/workspace"})

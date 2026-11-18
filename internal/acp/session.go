@@ -49,7 +49,7 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (SessionInfo, error
 		CreateTime:    time.Now().UTC(),
 		Modes:         res.Modes,
 		Models:        res.Models,
-		ConfigOptions: res.ConfigOptions,
+		ConfigOptions: parseConfigOptions(res.ConfigOptions),
 	}
 	c.mu.Lock()
 	c.sessions[info.SessionID] = info
@@ -85,19 +85,23 @@ func (c *Client) ListSessions() []SessionInfo {
 	return out
 }
 
-// CloseSession calls session/close on the ACP agent and removes the session from memory.
+// CloseSession calls session/close on the ACP agent and removes the session
+// from memory. A session in a turn (or a settings change) is refused with
+// ErrPromptInFlight.
 func (c *Client) CloseSession(ctx context.Context, sessionID string) error {
-	if _, err := c.GetSession(sessionID); err != nil {
+	release, err := c.markBusy(sessionID)
+	if err != nil {
 		return err
 	}
 	var res map[string]any
 	if err := c.call(ctx, "session/close", sessionIDParams{SessionID: sessionID}, &res); err != nil {
+		release()
 		return err
 	}
 	c.mu.Lock()
 	delete(c.sessions, sessionID)
-	delete(c.inFlight, sessionID)
 	c.mu.Unlock()
+	release()
 	return nil
 }
 

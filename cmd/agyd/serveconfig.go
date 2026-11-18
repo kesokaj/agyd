@@ -27,6 +27,9 @@ type appConfig struct {
 	// startup picker.
 	Model, Thinking, Mode string
 	NoPrompt              bool
+
+	// ConfigDir holds config.env and state.json (set by loadServeConfig).
+	ConfigDir string
 }
 
 // Addr is the host:port the server listens on.

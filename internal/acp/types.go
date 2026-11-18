@@ -21,6 +21,9 @@ var (
 	ErrPromptInFlight = errors.New("acp prompt already in flight for session")
 	// ErrInvalidConfig indicates invalid ACP client configuration.
 	ErrInvalidConfig = errors.New("invalid acp config")
+	// ErrInvalidArgument wraps a JSON-RPC -32602 (invalid params) from the
+	// agent, e.g. an unknown model or config option id.
+	ErrInvalidArgument = errors.New("agent rejected the request parameters")
 )
 
 // PermissionPolicy controls how the gateway responds to agent session/request_permission calls.
@@ -82,10 +85,11 @@ type SessionInfo struct {
 	SessionID     string          `json:"sessionId"`
 	Cwd           string          `json:"cwd"`
 	Backend       string          `json:"backend"`
+	Title         string          `json:"title,omitempty"`
 	CreateTime    time.Time       `json:"createTime"`
 	Modes         json.RawMessage `json:"modes,omitempty"`
 	Models        json.RawMessage `json:"models,omitempty"`
-	ConfigOptions json.RawMessage `json:"configOptions,omitempty"`
+	ConfigOptions []ConfigOption  `json:"configOptions,omitempty"`
 }
 
 // PromptResult contains the aggregated outcome of an ACP session/prompt turn.

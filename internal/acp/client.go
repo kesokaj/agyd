@@ -22,6 +22,9 @@ type Service interface {
 	CloseSession(ctx context.Context, sessionID string) error
 	Prompt(ctx context.Context, sessionID string, blocks []ContentBlock, onUpdate func(rawUpdate []byte)) (PromptResult, error)
 	Cancel(ctx context.Context, sessionID string) error
+	SetConfigOption(ctx context.Context, sessionID, configID, value string) (SessionInfo, error)
+	ListAgentSessions(ctx context.Context) ([]AgentSession, error)
+	ResumeSession(ctx context.Context, sessionID, cwd string) (SessionInfo, error)
 	Close() error
 }
 

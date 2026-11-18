@@ -269,10 +269,14 @@ func runFakeACPServer(mode string, r io.Reader, w io.Writer) {
 	var cancelMu sync.Mutex
 	cancelCount := 0
 	seq := 0
+	cfg := newFakeConfig()
 
 	for scanner.Scan() {
 		var msg rpcMessage
 		if err := json.Unmarshal(scanner.Bytes(), &msg); err != nil {
+			continue
+		}
+		if cfg.handle(msg, send) {
 			continue
 		}
 		switch msg.Method {
@@ -292,13 +296,18 @@ func runFakeACPServer(mode string, r io.Reader, w io.Writer) {
 		case "session/new":
 			seq++
 			sid := fmt.Sprintf("sess_%d", seq)
+			var np sessionNewParams
+			_ = json.Unmarshal(msg.Params, &np)
+			cfg.created[sid] = np.Cwd
+			cfg.reset(sid)
 			send(map[string]any{
 				"jsonrpc": "2.0",
 				"id":      msg.ID,
 				"result": map[string]any{
-					"sessionId": sid,
-					"modes":     map[string]any{"currentModeId": "default"},
-					"models":    map[string]any{"currentModelId": "gemini-test"},
+					"sessionId":     sid,
+					"modes":         map[string]any{"currentModeId": "default"},
+					"models":        map[string]any{"currentModelId": "gemini-test"},
+					"configOptions": cfg.options(sid),
 				},
 			})
 		case "session/close":

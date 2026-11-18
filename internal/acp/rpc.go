@@ -132,6 +132,9 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 			return pc.err
 		}
 		if pc.res.Error != nil {
+			if pc.res.Error.Code == -32602 {
+				return fmt.Errorf("%w: %w", ErrInvalidArgument, pc.res.Error)
+			}
 			return pc.res.Error
 		}
 		if out != nil && len(pc.res.Result) > 0 {

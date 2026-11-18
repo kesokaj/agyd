@@ -12,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -61,6 +62,12 @@ func run(ctx context.Context, log *slog.Logger, cfg appConfig) error {
 	cancelInit()
 	if err != nil {
 		log.Warn("initial acp startup failed; will retry lazily on next request", "err", err)
+	}
+
+	mgr := newManager(log, cfg, acpClient)
+	startConversation(ctx, log, cfg, mgr, os.Stdin, os.Stderr, stdinIsTerminal())
+	if ctx.Err() != nil {
+		return nil
 	}
 
 	extraHosts := exposedHosts(cfg.Host, net.InterfaceAddrs, os.Hostname)
@@ -140,6 +147,7 @@ func loadServeConfig(log *slog.Logger, args []string) (appConfig, error) {
 	}
 	cfg, err := loadConfig(args, layers.Getenv, func() (string, error) { return cwd, nil }, exec.LookPath)
 	if err == nil {
+		cfg.ConfigDir = filepath.Dir(layers.ConfigFile)
 		log.Info("settings", "model", cfg.Model, "thinking", cfg.Thinking, "mode", cfg.Mode,
 			"configFile", layers.ConfigFile, "dotEnvFile", layers.DotEnvFile)
 	}
