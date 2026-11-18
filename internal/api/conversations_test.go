@@ -17,8 +17,9 @@ func createConv(t *testing.T, e *testEnv, body string) conversation.Conversation
 func TestCreateConversation(t *testing.T) {
 	e := newTestEnv(t)
 
-	c := createConv(t, e, `{"cwd":"/work/a","model":"claude-sonnet-5-5","mode":"plan"}`)
-	if c.Cwd != "/work/a" || c.Model != "claude-sonnet-5-5" || c.ThinkingLevel != "medium" || c.Mode != "plan" || !c.Live || !c.Current {
+	work := t.TempDir()
+	c := createConv(t, e, `{"cwd":"`+work+`","model":"claude-sonnet-5-5","mode":"plan"}`)
+	if c.Cwd != work || c.Model != "claude-sonnet-5-5" || c.ThinkingLevel != "medium" || c.Mode != "plan" || !c.Live || !c.Current {
 		t.Errorf("created = %+v", c)
 	}
 
@@ -46,8 +47,9 @@ func TestCreateConversation(t *testing.T) {
 
 func TestListAndGetConversations(t *testing.T) {
 	e := newTestEnv(t)
-	a := createConv(t, e, `{"cwd":"/work/a"}`)
-	b := createConv(t, e, `{"cwd":"/work/b"}`)
+	workA, workB := t.TempDir(), t.TempDir()
+	a := createConv(t, e, `{"cwd":"`+workA+`"}`)
+	b := createConv(t, e, `{"cwd":"`+workB+`"}`)
 
 	list := decode[listConversationsResponse](t, e.do(http.MethodGet, "/v1/conversations", ""))
 	if len(list.Items) != 3 || list.Items[0].ConversationID != b.ConversationID || !list.Items[0].Current ||
@@ -55,7 +57,7 @@ func TestListAndGetConversations(t *testing.T) {
 		t.Errorf("list = %+v, want b (current), a, hist_1 (not live)", list.Items)
 	}
 
-	filtered := decode[listConversationsResponse](t, e.do(http.MethodGet, "/v1/conversations?cwd=/work/a", ""))
+	filtered := decode[listConversationsResponse](t, e.do(http.MethodGet, "/v1/conversations?cwd="+workA, ""))
 	if len(filtered.Items) != 1 || filtered.Items[0].ConversationID != a.ConversationID {
 		t.Errorf("cwd filter = %+v, want only a", filtered.Items)
 	}
@@ -74,8 +76,8 @@ func TestListAndGetConversations(t *testing.T) {
 // use switches the target of /v1/prompt, for live and history conversations.
 func TestUseSwitchesPromptTarget(t *testing.T) {
 	e := newTestEnv(t)
-	a := createConv(t, e, `{"cwd":"/work/a"}`)
-	b := createConv(t, e, `{"cwd":"/work/b"}`)
+	a := createConv(t, e, `{"cwd":"`+t.TempDir()+`"}`)
+	b := createConv(t, e, `{"cwd":"`+t.TempDir()+`"}`)
 
 	promptTarget := func() string {
 		t.Helper()

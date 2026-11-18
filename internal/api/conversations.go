@@ -3,6 +3,8 @@ package api
 import (
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
 
 	"agyd/internal/acp"
@@ -48,6 +50,29 @@ func (s *server) handleCreateConversation(w http.ResponseWriter, r *http.Request
 			Reason: "INVALID_CWD",
 			Field:  "cwd",
 			Msg:    "cwd must be a clean absolute path outside .gemini",
+		}
+	}
+	// agy accepts any path and adds it as a workspace root of every later
+	// conversation in the same agy process, so a missing folder is refused here,
+	// and so is a symlink whose target is inside .gemini.
+	if req.Cwd != "" {
+		if fi, err := os.Stat(cwd); err != nil || !fi.IsDir() {
+			return &apiError{
+				Status: http.StatusBadRequest,
+				Code:   "INVALID_ARGUMENT",
+				Reason: "INVALID_CWD",
+				Field:  "cwd",
+				Msg:    "cwd must be an existing directory",
+			}
+		}
+		if real, err := filepath.EvalSymlinks(cwd); err != nil || !acp.IsValidCwd(real) {
+			return &apiError{
+				Status: http.StatusBadRequest,
+				Code:   "INVALID_ARGUMENT",
+				Reason: "INVALID_CWD",
+				Field:  "cwd",
+				Msg:    "cwd must not resolve into .gemini",
+			}
 		}
 	}
 	info, err := s.mgr.Create(r.Context(), conversation.CreateRequest{

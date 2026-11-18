@@ -1,6 +1,7 @@
 package api
 
 import (
+	"cmp"
 	"encoding/json"
 	"errors"
 	"io"
@@ -103,6 +104,9 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v) // response already started
 }
 
+// maxBodyBytes caps every JSON request body.
+const maxBodyBytes = 1 << 20
+
 func readJSON(r *http.Request, v any, allowEmpty bool) error {
 	if r.Body == nil {
 		if allowEmpty {
@@ -110,14 +114,24 @@ func readJSON(r *http.Request, v any, allowEmpty bool) error {
 		}
 		return &apiError{Status: http.StatusBadRequest, Code: "INVALID_ARGUMENT", Reason: "MALFORMED_BODY", Msg: "request body is required"}
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<20))
+	dec := json.NewDecoder(http.MaxBytesReader(nil, r.Body, maxBodyBytes))
 	dec.DisallowUnknownFields()
-	if err := dec.Decode(v); err != nil {
-		if allowEmpty && errors.Is(err, io.EOF) {
-			return nil
-		}
-		slog.DebugContext(r.Context(), "malformed json body", "err", err, "path", r.URL.Path)
-		return &apiError{Status: http.StatusBadRequest, Code: "INVALID_ARGUMENT", Reason: "MALFORMED_BODY", Msg: "malformed JSON body"}
+	err := dec.Decode(v)
+	if allowEmpty && errors.Is(err, io.EOF) {
+		return nil
 	}
-	return nil
+	if err == nil {
+		// Exactly one JSON value: trailing data is as malformed as a bad value.
+		if extra := dec.Decode(&json.RawMessage{}); extra != io.EOF {
+			err = cmp.Or(extra, errors.New("trailing data after JSON value"))
+		}
+	}
+	if err == nil {
+		return nil
+	}
+	if _, tooBig := errors.AsType[*http.MaxBytesError](err); tooBig {
+		return &apiError{Status: http.StatusRequestEntityTooLarge, Code: "INVALID_ARGUMENT", Reason: "BODY_TOO_LARGE", Msg: "request body exceeds 1 MiB"}
+	}
+	slog.DebugContext(r.Context(), "malformed json body", "err", err, "path", r.URL.Path)
+	return &apiError{Status: http.StatusBadRequest, Code: "INVALID_ARGUMENT", Reason: "MALFORMED_BODY", Msg: "malformed JSON body"}
 }

@@ -12,12 +12,15 @@ import (
 )
 
 // IsValidCwd reports whether cwd is a clean absolute path outside the .gemini credential store.
+// The segment match ignores case because macOS and Windows file systems do.
+// It reads only the path text: callers that accept a client path also check
+// the symlink-resolved path.
 func IsValidCwd(cwd string) bool {
 	if !filepath.IsAbs(cwd) || filepath.Clean(cwd) != cwd {
 		return false
 	}
 	for _, seg := range strings.Split(cwd, string(filepath.Separator)) {
-		if seg == ".gemini" {
+		if strings.EqualFold(seg, ".gemini") {
 			return false
 		}
 	}
@@ -168,6 +171,7 @@ func (c *Client) handleSessionUpdate(rawParams json.RawMessage) {
 	_ = json.Unmarshal(p.Update, &env)
 
 	c.mu.Lock()
+	c.applySettingsUpdate(p.SessionID, env)
 	sub, ok := c.inFlight[p.SessionID]
 	if ok {
 		if sub.onUpdate == nil {
@@ -182,4 +186,34 @@ func (c *Client) handleSessionUpdate(rawParams json.RawMessage) {
 	if ok && sub.onUpdate != nil {
 		sub.onUpdate(rawParams)
 	}
+}
+
+// applySettingsUpdate keeps a live session's configOptions in step with the
+// settings agy changes on its own (config_option_update carries the full
+// list, current_mode_update the new mode). The caller holds c.mu.
+func (c *Client) applySettingsUpdate(sessionID string, env sessionUpdateEnvelope) {
+	info, ok := c.sessions[sessionID]
+	if !ok {
+		return
+	}
+	switch env.SessionUpdate {
+	case "config_option_update":
+		if opts := parseConfigOptions(env.ConfigOptions); opts != nil {
+			info.ConfigOptions = opts
+		}
+	case "current_mode_update":
+		if env.CurrentModeID == "" {
+			return
+		}
+		opts := slices.Clone(info.ConfigOptions)
+		for i := range opts {
+			if opts[i].ID == ConfigMode {
+				opts[i].CurrentValue = env.CurrentModeID
+			}
+		}
+		info.ConfigOptions = opts
+	default:
+		return
+	}
+	c.sessions[sessionID] = info
 }

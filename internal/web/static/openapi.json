@@ -3,7 +3,7 @@
   "info": {
     "title": "agyd",
     "version": "0.2.0",
-    "description": "Local HTTP/SSE API wrapping agy-cli. Prompts go to the current conversation unless a conversation id is given. Every /healthz and /v1 response (errors included, Host-guard and CSRF 403s excepted) carries Agyd-Conversation, Agyd-Model, Agyd-Thinking-Level and Agyd-Mode."
+    "description": "Local HTTP/SSE API wrapping agy-cli. Prompts go to the current conversation unless a conversation id is given. Every /healthz and /v1 response (errors included, Host-guard and CSRF 403s excepted) carries Agyd-Conversation, Agyd-Model, Agyd-Thinking-Level and Agyd-Mode. A known /healthz or /v1 path called with a method it does not support answers 405 METHOD_NOT_ALLOWED with an Allow header; an unknown path answers 404 NOT_FOUND."
   },
   "servers": [
     {
@@ -186,6 +186,9 @@
           "409": {
             "$ref": "#/components/responses/Conflict"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
             "$ref": "#/components/responses/Internal"
           },
@@ -254,6 +257,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
             "$ref": "#/components/responses/Internal"
@@ -411,6 +417,9 @@
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
             "$ref": "#/components/responses/Internal"
           },
@@ -535,6 +544,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
             "$ref": "#/components/responses/Internal"
@@ -667,6 +679,9 @@
           },
           "409": {
             "$ref": "#/components/responses/Conflict"
+          },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
           },
           "500": {
             "$ref": "#/components/responses/Internal"
@@ -914,6 +929,9 @@
           "403": {
             "$ref": "#/components/responses/Forbidden"
           },
+          "413": {
+            "$ref": "#/components/responses/PayloadTooLarge"
+          },
           "500": {
             "$ref": "#/components/responses/Internal"
           }
@@ -1046,7 +1064,7 @@
         "properties": {
           "cwd": {
             "type": "string",
-            "description": "Absolute path; defaults to the server workspace"
+            "description": "Absolute path of an existing directory; defaults to the server workspace"
           },
           "model": {
             "type": "string",
@@ -1190,7 +1208,7 @@
     },
     "responses": {
       "Forbidden": {
-        "description": "Host not allowed (FORBIDDEN_HOST, JSON) or cross-origin browser request (blocked by CSRF protection, plain text)",
+        "description": "Host not allowed (FORBIDDEN_HOST) or cross-origin browser request refused by CSRF protection (CROSS_ORIGIN_REQUEST)",
         "content": {
           "application/json": {
             "schema": {
@@ -1272,7 +1290,7 @@
         }
       },
       "BadRequest": {
-        "description": "Malformed body (MALFORMED_BODY), missing field (FIELD_REQUIRED), bad cwd (INVALID_CWD) or a setting agyd or agy rejects (INVALID_SETTING)",
+        "description": "Malformed body or trailing data after the JSON value (MALFORMED_BODY), missing field (FIELD_REQUIRED), bad cwd: not a clean absolute path, inside .gemini (any case, or via a symlink), or not an existing directory (INVALID_CWD), or a setting agyd or agy rejects (INVALID_SETTING)",
         "headers": {
           "Agyd-Conversation": {
             "$ref": "#/components/headers/AgydConversation"
@@ -1345,6 +1363,30 @@
       },
       "Unavailable": {
         "description": "agy has not reported its options yet (MODELS_UNKNOWN)",
+        "headers": {
+          "Agyd-Conversation": {
+            "$ref": "#/components/headers/AgydConversation"
+          },
+          "Agyd-Model": {
+            "$ref": "#/components/headers/AgydModel"
+          },
+          "Agyd-Thinking-Level": {
+            "$ref": "#/components/headers/AgydThinkingLevel"
+          },
+          "Agyd-Mode": {
+            "$ref": "#/components/headers/AgydMode"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "PayloadTooLarge": {
+        "description": "Request body larger than 1 MiB (BODY_TOO_LARGE)",
         "headers": {
           "Agyd-Conversation": {
             "$ref": "#/components/headers/AgydConversation"

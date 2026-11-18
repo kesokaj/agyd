@@ -32,8 +32,8 @@ Serves `/healthz`, `/v1/status`, `/v1/current` (GET, PATCH), `/v1/prompt`, `/v1/
 
 - **Interfaces:** `NewHandler(log, svc acp.Service, mgr *conversation.Manager, cfg Config) http.Handler`; `Routes() []Route` (checked against `openapi.json`); `Guard(next, extraHosts...)` (Host allowlist, `403 FORBIDDEN_HOST`, `http.CrossOriginProtection`).
 - **Headers:** `Agyd-Conversation`, `Agyd-Model`, `Agyd-Thinking-Level`, `Agyd-Mode` on every `/healthz` and `/v1/*` response (empty values omitted).
-- **Errors:** AIP-193 envelope with `ErrorInfo.reason` in domain `agyd.local`. New reasons: `CONVERSATION_NOT_FOUND`, `NO_CURRENT_CONVERSATION`, `INVALID_SETTING` (format, unknown to agy, or agy `-32602`), `MODELS_UNKNOWN`. Existing: `PROMPT_IN_FLIGHT`, `INVALID_CWD`, `MALFORMED_BODY`, `ACP_*`, `UNAVAILABLE`, `FORBIDDEN_HOST`.
-- **Limits:** request bodies 1 MiB; `PATCH`/`DELETE` during a turn are `409 PROMPT_IN_FLIGHT`.
+- **Errors:** AIP-193 envelope with `ErrorInfo.reason` in domain `agyd.local`. New reasons: `CONVERSATION_NOT_FOUND`, `NO_CURRENT_CONVERSATION`, `INVALID_SETTING` (format, unknown to agy, or agy `-32602`), `MODELS_UNKNOWN`. Existing: `PROMPT_IN_FLIGHT`, `INVALID_CWD` (also a `cwd` that is not an existing directory, or whose symlink-resolved path or any letter case of a segment is `.gemini`), `MALFORMED_BODY` (also trailing data after the value), `ACP_*`, `UNAVAILABLE`, `FORBIDDEN_HOST`. Surface hardening: `METHOD_NOT_ALLOWED` (405 + `Allow`, from the route table), `BODY_TOO_LARGE` (413), `CROSS_ORIGIN_REQUEST` (403, CSRF deny handler). A handler error caused by the client disconnecting writes nothing and logs at INFO (`client closed request`). Pinned by `internal/api/errors_test.go`.
+- **Limits:** request bodies 1 MiB (`413 BODY_TOO_LARGE`); `PATCH`/`DELETE` during a turn are `409 PROMPT_IN_FLIGHT`.
 
 ## T4 — `internal/web` (Swagger UI and OpenAPI)
 

@@ -2,6 +2,8 @@
 package api
 
 import (
+	"context"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -31,6 +33,14 @@ type server struct {
 // Any other Host header is refused, which blocks DNS rebinding.
 func Guard(next http.Handler, extraHosts ...string) http.Handler {
 	csrf := http.NewCrossOriginProtection()
+	csrf.SetDenyHandler(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		writeError(w, &apiError{
+			Status: http.StatusForbidden,
+			Code:   "PERMISSION_DENIED",
+			Reason: "CROSS_ORIGIN_REQUEST",
+			Msg:    "cross-origin request refused",
+		})
+	}))
 	csrfHandler := csrf.Handler(next)
 
 	allowed := map[string]bool{"localhost": true, "127.0.0.1": true, "::1": true}
@@ -79,12 +89,31 @@ func NewHandler(log *slog.Logger, svc acp.Service, mgr *conversation.Manager, cf
 	s := &server{log: log, svc: svc, mgr: mgr, cfg: cfg}
 
 	mux := http.NewServeMux()
+	// paths matches a route's path for any method, so the fallback below can
+	// tell a wrong method (405 with Allow) from an unknown path (404).
+	paths := http.NewServeMux()
+	allow := map[string][]string{}
 	for _, r := range s.routes() {
 		mux.Handle(r.Method+" "+r.Pattern, s.adapt(r.handler))
+		if _, seen := allow[r.Pattern]; !seen {
+			paths.Handle(r.Pattern, http.NotFoundHandler())
+		}
+		allow[r.Pattern] = append(allow[r.Pattern], r.Method)
 	}
 
-	// Default handler for 404s
+	// The catch-all shadows ServeMux's own 405, so it answers both cases in
+	// the AIP-193 shape.
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if _, pattern := paths.Handler(r); pattern != "" {
+			w.Header().Set("Allow", strings.Join(allow[pattern], ", "))
+			writeError(w, &apiError{
+				Status: http.StatusMethodNotAllowed,
+				Code:   "UNIMPLEMENTED",
+				Reason: "METHOD_NOT_ALLOWED",
+				Msg:    "method " + r.Method + " not allowed; allowed: " + strings.Join(allow[pattern], ", "),
+			})
+			return
+		}
 		writeError(w, &apiError{
 			Status: http.StatusNotFound,
 			Code:   "NOT_FOUND",
@@ -120,6 +149,12 @@ func (s *server) recoverMiddleware(next http.Handler) http.Handler {
 func (s *server) adapt(h handlerFunc) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if err := h(w, r); err != nil {
+			// The client went away mid-request (the turn was cancelled for
+			// it): nobody reads a reply, and it is not a server fault.
+			if r.Context().Err() != nil && errors.Is(err, context.Canceled) {
+				s.log.InfoContext(r.Context(), "client closed request", "path", r.URL.Path)
+				return
+			}
 			ae := s.classifyError(r, err)
 			writeError(w, ae)
 		}

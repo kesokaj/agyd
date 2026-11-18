@@ -130,8 +130,15 @@ func hasValue(o acp.ConfigOption, v string) bool {
 	return false
 }
 
-// Models returns the configOptions agy last reported for any conversation.
+// Models returns the configOptions agy last reported for any conversation,
+// refreshed from the live current conversation first so settings agy changed
+// on its own (config_option_update) show up without a new conversation.
 func (m *Manager) Models() ([]acp.ConfigOption, error) {
+	if id := m.CurrentID(); id != "" {
+		if info, err := m.agent.GetSession(id); err == nil {
+			m.noteOptions(info.ConfigOptions)
+		}
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if len(m.options) == 0 {

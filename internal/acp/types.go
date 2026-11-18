@@ -189,8 +189,10 @@ type sessionUpdateParams struct {
 }
 
 type sessionUpdateEnvelope struct {
-	SessionUpdate string       `json:"sessionUpdate"`
-	Content       ContentBlock `json:"content"`
+	SessionUpdate string          `json:"sessionUpdate"`
+	Content       ContentBlock    `json:"content"`
+	ConfigOptions json.RawMessage `json:"configOptions"` // config_option_update
+	CurrentModeID string          `json:"currentModeId"` // current_mode_update
 }
 
 type permissionOption struct {
