@@ -205,6 +205,14 @@ type requestPermissionParams struct {
 	Options   []permissionOption `json:"options"`
 }
 
+// permissionToolCall is the part of an ACP ToolCallUpdate agyd logs. It is
+// decoded apart from requestPermissionParams so a malformed tool call can
+// never change the permission decision. The title is deliberately absent.
+type permissionToolCall struct {
+	ToolCallID string `json:"toolCallId"`
+	Kind       string `json:"kind"`
+}
+
 type requestPermissionResult struct {
 	Outcome permissionOutcome `json:"outcome"`
 }

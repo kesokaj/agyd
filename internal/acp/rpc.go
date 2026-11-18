@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"os/exec"
+	"strings"
+	"unicode"
 )
 
 func (c *Client) readLoop(r io.Reader, cmd *exec.Cmd) {
@@ -61,6 +63,9 @@ func (c *Client) dispatchIncoming(msg rpcMessage) {
 
 func (c *Client) handleAgentRequest(id int64, method string, rawParams json.RawMessage) {
 	if method != "session/request_permission" {
+		var p sessionIDParams
+		_ = json.Unmarshal(rawParams, &p)
+		c.log.Info("unsupported agent request", "conversationId", clip(p.SessionID), "method", clip(method))
 		_ = c.writeEnvelope(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      id,
@@ -69,13 +74,87 @@ func (c *Client) handleAgentRequest(id int64, method string, rawParams json.RawM
 		return
 	}
 	var params requestPermissionParams
-	_ = json.Unmarshal(rawParams, &params)
+	decodeErr := json.Unmarshal(rawParams, &params)
 	outcome := selectPermissionOutcome(c.cfg.PermissionPolicy, params.Options)
+	c.logPermissionDecision(params, outcome, decodeErr)
 	_ = c.writeEnvelope(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"result":  requestPermissionResult{Outcome: outcome},
 	})
+}
+
+const (
+	// maxLoggedField caps every agent-supplied string in a log line, in runes.
+	maxLoggedField = 64
+	// maxLoggedOptions caps how many permission options one log line lists.
+	maxLoggedOptions = 8
+)
+
+// loggedOption is the part of a permission option agyd logs; the free-text
+// name is left out.
+type loggedOption struct {
+	OptionID string `json:"optionId"`
+	Kind     string `json:"kind"`
+}
+
+// logPermissionDecision writes one slog line per session/request_permission
+// agyd answers: the conversation, the tool call id and kind, the offered
+// options, the policy and the chosen outcome. The tool call title is never
+// logged: for execute calls it is the shell command (SDD Privacy); HTTP
+// clients already see it in the SSE tool_call update.
+func (c *Client) logPermissionDecision(p requestPermissionParams, out permissionOutcome, decodeErr error) {
+	var tc permissionToolCall
+	_ = json.Unmarshal(p.ToolCall, &tc)
+	optionKind := ""
+	for _, o := range p.Options {
+		if out.OptionID != "" && o.OptionID == out.OptionID {
+			optionKind = o.Kind
+			break
+		}
+	}
+	opts := make([]loggedOption, 0, min(len(p.Options), maxLoggedOptions))
+	for _, o := range p.Options[:min(len(p.Options), maxLoggedOptions)] {
+		opts = append(opts, loggedOption{OptionID: clip(o.OptionID), Kind: clip(o.Kind)})
+	}
+	attrs := []any{
+		"conversationId", clip(p.SessionID),
+		"toolCallId", clip(tc.ToolCallID),
+		"toolKind", clip(tc.Kind),
+		"options", opts,
+		"optionCount", len(p.Options),
+		"policy", string(c.cfg.PermissionPolicy),
+		"outcome", out.Outcome,
+		"optionId", clip(out.OptionID),
+		"optionKind", clip(optionKind),
+	}
+	if decodeErr != nil {
+		attrs = append(attrs, "err", clip(decodeErr.Error()))
+	}
+	c.log.Info("permission decision", attrs...)
+}
+
+// clip returns s cut to at most maxLoggedField runes (a cut ends in "…"),
+// with control and format runes (bidi overrides, zero-width) replaced by
+// U+FFFD so a logged value displays as what it is. It walks s once without
+// converting the whole string.
+func clip(s string) string {
+	var b strings.Builder
+	n := 0
+	for i, r := range s {
+		if n == maxLoggedField {
+			if i < len(s) {
+				b.WriteString("…")
+			}
+			break
+		}
+		if unicode.IsControl(r) || unicode.Is(unicode.Cf, r) {
+			r = unicode.ReplacementChar
+		}
+		b.WriteRune(r)
+		n++
+	}
+	return b.String()
 }
 
 func selectPermissionOutcome(policy PermissionPolicy, opts []permissionOption) permissionOutcome {

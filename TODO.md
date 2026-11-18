@@ -11,12 +11,14 @@ No active phase. `PLAN-model-selection` is complete (Phase 5 closed 2026-11-18, 
 
 ## Next
 
-- Permission visibility: log every permission decision and find out why agy writes under `deny_all` without asking (ADR-005 known limit).
 - Persist the creation cwd of agyd-created conversations (agy `session/list` reports the git root).
 - CLI output hardening: strip terminal control characters from server and agent text.
+- Permission positive control (operator): with agy `toolPermission: request-review`, rerun the deny_all probe and confirm `permission decision` lines and refusals.
 
 ## Backlog
 
+- 2026-11-18 (permission probe) agy reported `rm -rf rmme.txt` as run while the file stayed (its own deny rule); agyd cannot see that refusal. Consider surfacing tool_call status from `session/update` in the CLI.
+- 2026-11-18 (security permission-log #2) rate-limit or dedupe `unsupported agent request` lines per method (rebutted for now: agy is the operator's local child).
 - 2026-11-18 (security r1 #7) `GET /v1/current` resumes a non-live conversation; consider a side-effect-free read.
 - 2026-11-18 (reviewer r1 #4) `Manager.Resolve` falls back to a fresh conversation only on `ErrSessionNotFound`.
 - 2026-11-18 (reviewer r1 #5) openapi.json: declare 400/401 on `use`, `current` and the PATCH routes.

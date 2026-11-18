@@ -2,6 +2,7 @@ package acp
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -148,6 +150,194 @@ func TestClientPromptStreamingAndPermission(t *testing.T) {
 			t.Errorf("Text = %q, want %q", res.Text, "Denied: reject-once!")
 		}
 	})
+}
+
+// syncBuffer is an io.Writer safe for the client's read goroutine and the test.
+type syncBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *syncBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+// records returns every JSON log line whose msg equals msg.
+func (b *syncBuffer) records(t *testing.T, msg string) []map[string]any {
+	t.Helper()
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	var out []map[string]any
+	for _, line := range bytes.Split(b.buf.Bytes(), []byte("\n")) {
+		if len(line) == 0 {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal(line, &rec); err != nil {
+			t.Fatalf("log line is not JSON: %q: %v", line, err)
+		}
+		if rec["msg"] == msg {
+			out = append(out, rec)
+		}
+	}
+	return out
+}
+
+func TestPermissionDecisionLogged(t *testing.T) {
+	cases := []struct {
+		policy      PermissionPolicy
+		wantOutcome string
+		wantOption  string
+		wantKind    string
+	}{
+		{PermissionAllowAll, "selected", "allow-once", "allow_once"},
+		{PermissionDenyAll, "selected", "reject-once", "reject_once"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.policy), func(t *testing.T) {
+			c := newTestClient(t, "permission", tc.policy)
+			logs := &syncBuffer{}
+			c.log = slog.New(slog.NewJSONHandler(logs, nil))
+			ctx := t.Context()
+			if err := c.Start(ctx); err != nil {
+				t.Fatalf("Start: %v", err)
+			}
+			sess, err := c.NewSession(ctx, t.TempDir())
+			if err != nil {
+				t.Fatalf("NewSession: %v", err)
+			}
+			if _, err := c.Prompt(ctx, sess.SessionID, []ContentBlock{{Type: "text", Text: "run tool"}}, nil); err != nil {
+				t.Fatalf("Prompt: %v", err)
+			}
+
+			recs := logs.records(t, "permission decision")
+			if len(recs) != 1 {
+				t.Fatalf("got %d permission decision lines, want 1", len(recs))
+			}
+			rec := recs[0]
+			want := map[string]any{
+				"level":          "INFO",
+				"conversationId": sess.SessionID,
+				"toolCallId":     "tc_1",
+				"toolKind":       "execute",
+				"policy":         string(tc.policy),
+				"outcome":        tc.wantOutcome,
+				"optionId":       tc.wantOption,
+				"optionKind":     tc.wantKind,
+			}
+			for k, v := range want {
+				if rec[k] != v {
+					t.Errorf("%s = %v, want %v", k, rec[k], v)
+				}
+			}
+			opts, ok := rec["options"].([]any)
+			if !ok || len(opts) != 2 {
+				t.Fatalf("options = %v, want 2 entries", rec["options"])
+			}
+			first, _ := opts[0].(map[string]any)
+			if first["optionId"] != "allow-once" || first["kind"] != "allow_once" {
+				t.Errorf("options[0] = %v, want optionId=allow-once kind=allow_once", first)
+			}
+		})
+	}
+}
+
+func TestClipBoundsAndSanitizes(t *testing.T) {
+	long := strings.Repeat("é", maxLoggedField+50)
+	if n := len([]rune(clip(long))); n != maxLoggedField+1 {
+		t.Errorf("clipped value has %d runes, want %d (limit plus ellipsis)", n, maxLoggedField+1)
+	}
+	exact := strings.Repeat("a", maxLoggedField)
+	if got := clip(exact); got != exact {
+		t.Errorf("clip(%d runes) = %q, want unchanged", maxLoggedField, got)
+	}
+	if got := clip("ls\u202e\u200b\x1b[31m"); got != "ls\ufffd\ufffd\ufffd[31m" {
+		t.Errorf("clip(bidi, zero-width, ESC) = %q, want each replaced by U+FFFD", got)
+	}
+}
+
+// nopWriteCloser lets a test stand in for the child's stdin.
+type nopWriteCloser struct{ *syncBuffer }
+
+func (nopWriteCloser) Close() error { return nil }
+
+func TestPermissionDecisionMalformedAndOversized(t *testing.T) {
+	logs := &syncBuffer{}
+	stdin := &syncBuffer{}
+	c := &Client{
+		cfg:   Config{PermissionPolicy: PermissionDenyAll},
+		log:   slog.New(slog.NewJSONHandler(logs, nil)),
+		stdin: nopWriteCloser{stdin},
+	}
+
+	// options of the wrong type: the decode fails, deny_all cancels, the line still comes out with err.
+	c.handleAgentRequest(7, "session/request_permission", json.RawMessage(`{"sessionId":"s1","toolCall":{"toolCallId":"tc","title":"curl -H 'Authorization: Bearer SECRET'","kind":"execute"},"options":"x"}`))
+	recs := logs.records(t, "permission decision")
+	if len(recs) != 1 {
+		t.Fatalf("got %d permission decision lines, want 1", len(recs))
+	}
+	if recs[0]["outcome"] != "cancelled" || recs[0]["err"] == nil {
+		t.Errorf("record = %v, want outcome=cancelled and err set", recs[0])
+	}
+	if !strings.Contains(stdin.buf.String(), `"outcome":"cancelled"`) {
+		t.Errorf("response = %q, want a cancelled outcome sent to agy", stdin.buf.String())
+	}
+	if strings.Contains(logs.buf.String(), "SECRET") || strings.Contains(logs.buf.String(), "curl") {
+		t.Errorf("tool call title reached the log: %s", logs.buf.String())
+	}
+
+	// 20 options with huge ids: the line lists 8, counts 20, and clips every id.
+	opts := make([]map[string]string, 20)
+	for i := range opts {
+		opts[i] = map[string]string{"optionId": strings.Repeat("x", 10000), "name": "n", "kind": "reject_once"}
+	}
+	raw, _ := json.Marshal(map[string]any{"sessionId": strings.Repeat("s", 10000), "options": opts})
+	c.handleAgentRequest(8, "session/request_permission", raw)
+	recs = logs.records(t, "permission decision")
+	rec := recs[len(recs)-1]
+	logged, _ := rec["options"].([]any)
+	if len(logged) != maxLoggedOptions || rec["optionCount"] != float64(20) {
+		t.Fatalf("options = %d entries, optionCount = %v; want %d and 20", len(logged), rec["optionCount"], maxLoggedOptions)
+	}
+	for _, k := range []string{"conversationId", "optionId"} {
+		if s, _ := rec[k].(string); len([]rune(s)) > maxLoggedField+1 {
+			t.Errorf("%s has %d runes, want at most %d", k, len([]rune(s)), maxLoggedField+1)
+		}
+	}
+	first, _ := logged[0].(map[string]any)
+	if id, _ := first["optionId"].(string); len([]rune(id)) > maxLoggedField+1 || first["name"] != nil {
+		t.Errorf("options[0] = %v, want a clipped optionId and no name", first)
+	}
+}
+
+func TestUnsupportedAgentRequestLogged(t *testing.T) {
+	c := newTestClient(t, "fs_request", PermissionDenyAll)
+	logs := &syncBuffer{}
+	c.log = slog.New(slog.NewJSONHandler(logs, nil))
+	ctx := t.Context()
+	if err := c.Start(ctx); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	sess, err := c.NewSession(ctx, t.TempDir())
+	if err != nil {
+		t.Fatalf("NewSession: %v", err)
+	}
+	res, err := c.Prompt(ctx, sess.SessionID, []ContentBlock{{Type: "text", Text: "write file"}}, nil)
+	if err != nil {
+		t.Fatalf("Prompt: %v", err)
+	}
+	if res.Text != "code=-32601" {
+		t.Errorf("agent saw %q, want code=-32601", res.Text)
+	}
+	recs := logs.records(t, "unsupported agent request")
+	if len(recs) != 1 {
+		t.Fatalf("got %d unsupported agent request lines, want 1", len(recs))
+	}
+	if recs[0]["method"] != "fs/write_text_file" || recs[0]["conversationId"] != sess.SessionID {
+		t.Errorf("record = %v, want method=fs/write_text_file conversationId=%s", recs[0], sess.SessionID)
+	}
 }
 
 func TestClientCancelAndCrashRecovery(t *testing.T) {
@@ -415,6 +605,35 @@ func runFakeACPServer(mode string, r io.Reader, w io.Writer) {
 				}(p.SessionID, reqID, ch)
 				continue
 			}
+			if mode == "fs_request" {
+				send(map[string]any{
+					"jsonrpc": "2.0",
+					"id":      int64(901),
+					"method":  "fs/write_text_file",
+					"params":  map[string]any{"sessionId": p.SessionID, "path": "/tmp/x", "content": "x"},
+				})
+				if scanner.Scan() {
+					var resp rpcMessage
+					_ = json.Unmarshal(scanner.Bytes(), &resp)
+					code := 0
+					if resp.Error != nil {
+						code = resp.Error.Code
+					}
+					send(map[string]any{
+						"jsonrpc": "2.0",
+						"method":  "session/update",
+						"params": map[string]any{
+							"sessionId": p.SessionID,
+							"update": map[string]any{
+								"sessionUpdate": "agent_message_chunk",
+								"content":       map[string]any{"type": "text", "text": fmt.Sprintf("code=%d", code)},
+							},
+						},
+					})
+					send(map[string]any{"jsonrpc": "2.0", "id": msg.ID, "result": map[string]any{"stopReason": "end_turn"}})
+				}
+				continue
+			}
 			if mode == "permission" {
 				permID := int64(900)
 				send(map[string]any{
@@ -423,7 +642,7 @@ func runFakeACPServer(mode string, r io.Reader, w io.Writer) {
 					"method":  "session/request_permission",
 					"params": map[string]any{
 						"sessionId": p.SessionID,
-						"toolCall":  map[string]any{"toolCallId": "tc_1", "title": "Execute command"},
+						"toolCall":  map[string]any{"toolCallId": "tc_1", "title": "Execute command", "kind": "execute"},
 						"options": []map[string]any{
 							{"optionId": "allow-once", "name": "Allow once", "kind": "allow_once"},
 							{"optionId": "reject-once", "name": "Reject once", "kind": "reject_once"},

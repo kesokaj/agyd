@@ -21,7 +21,8 @@ Manages the `agy acp` child over NDJSON-RPC 2.0. It multiplexes calls, fans `ses
 
 - **Interfaces:** `NewClient`, `Status`, `NewSession`, `GetSession`, `ListSessions`, `CloseSession`, `Prompt`, `Cancel`, `SetConfigOption` (`session/set_config_option`), `ListAgentSessions` (`session/list`, agy's history), `ResumeSession` (`session/resume`; settings reset to agy defaults).
 - **Errors:** `*RPCError`, `ErrProcessClosed`, `ErrSessionNotFound`, `ErrPromptInFlight` (also for set-config and close during a turn), `ErrInvalidArgument` (`-32602`, e.g. an unknown model), `ErrInvalidConfig`.
-- **Permission policy:** `ALLOW_ALL` picks the first allow option, `DENY_ALL` the first reject option, else cancels. It applies only to requests agy sends (`ADR-005` known limit).
+- **Permission policy:** `ALLOW_ALL` picks the first allow option, `DENY_ALL` the first reject option, else cancels. It applies only to requests agy sends (`ADR-005` known limit); agy sends none while its own `toolPermission` is `always-proceed`.
+- **Permission log:** every `session/request_permission` answer writes one INFO line `permission decision` (`conversationId`, `toolCallId`, `toolKind`, the first 8 `options` as `optionId`/`kind`, `optionCount`, `policy`, `outcome`, `optionId`, `optionKind`, `err` on malformed params). Other agent requests log `unsupported agent request` (`conversationId`, `method`) and get `-32601`. The tool title and option names are never logged; every agent string is cut to 64 runes with control and format runes replaced.
 
 ## T3 — `internal/api` (REST + SSE handlers, guard)
 
@@ -90,7 +91,7 @@ Every component in `SDD.md` maps to its technical design section and test suite.
 | Component | Section | Verified by |
 |---|---|---|
 | M1 | T1 | `TestConfigFromEnvAndFlags`, `TestDispatchServeVersusClient`, `TestConfigEnvWriterSavesOnlyGivenKeys`, `TestPickDefaults`, `TestPickDefaultsWithoutOptions`, `TestWantPicker`, `TestMuxIsGuarded`, `TestMuxUnknownPathJSON`, `TestListenNetwork`, `TestExposedHosts`, `TestLocalURL`, `TestWildcardV4DoesNotListenOnV6` |
-| M2 | T2 | `TestClientInitializeAndSessionLifecycle`, `TestClientPromptStreamingAndPermission`, `TestClientCancelAndCrashRecovery`, `TestSessionConfigOptions`, `TestListAndResumeAgentSessions`, `TestSetConfigAndCloseRefusedDuringTurn`, `TestParseConfigOptionsSkipsUnknownShapes` |
+| M2 | T2 | `TestClientInitializeAndSessionLifecycle`, `TestClientPromptStreamingAndPermission`, `TestClientCancelAndCrashRecovery`, `TestSessionConfigOptions`, `TestListAndResumeAgentSessions`, `TestSetConfigAndCloseRefusedDuringTurn`, `TestParseConfigOptionsSkipsUnknownShapes`, `TestPermissionDecisionLogged`, `TestPermissionDecisionMalformedAndOversized`, `TestClipBoundsAndSanitizes`, `TestUnsupportedAgentRequestLogged` |
 | M3 | T3 | `TestStatusAndHealthEndpoints`, `TestCreateConversation`, `TestListAndGetConversations`, `TestPatchSettings`, `TestDeleteCurrentClearsPointer`, `TestUseSwitchesPromptTarget`, `TestPatchAndDeleteDuringTurn`, `TestPromptCurrentAutoCreates`, `TestPromptSSEAndErrors`, `TestCancelEndpoints`, `TestHeadersOnEveryResponse`, `TestDefaultsRoundTrip`, `TestDefaultsRejectInjection`, `TestModels`, `TestClassifyErrorMapping`, `TestGuard`, `TestGuardExtraHosts` |
 | M4 | T4 | `TestWebRoutes`, `TestOpenAPIRoutesMatchAPI` |
 | M5 | T5 | `TestParseEnv`, `TestReadEnvFile`, `TestOpenEnvFileNeverBlocks`, `TestValidSettingValue`, `TestDir`, `TestFindDotEnv`, `TestLoadPrecedence`, `TestLoadMissingFilesAndErrors`, `TestLoadNeverTouchesProcessEnv`, `TestWriteConfigEnv`, `TestStateStore`, `TestStateStoreConcurrentSaves`, `TestStateStoreCorruptFile` |

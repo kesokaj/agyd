@@ -222,7 +222,7 @@ Then open `http://<your-machine-ip>:8080/docs` from the other device, or run `ag
 - **Host check.** Requests must name `localhost`, `127.0.0.1` or `::1`, or (with `-host`) one of your machine's own IPs or its hostname. Anything else gets `403`. This blocks DNS-rebinding attacks.
 - **CSRF protection.** Browser requests from other websites are blocked.
 - **No token.** There is no API key. The protection is the bind address plus the two checks above. Anyone who passes them can also list your agy conversations (titles included), switch the current one, and change your saved defaults in `config.env`.
-- **`deny_all` is not a sandbox.** It answers only the permission requests agy sends. In a live check (agy 1.5.11), agy wrote a file in `default` mode under `deny_all` without asking, and `accept-edits` writes without asking by design. Run agyd in a folder you are willing to have changed.
+- **`deny_all` is not a sandbox.** It answers only the permission requests agy sends, and agy decides whether to send them from its own settings (`toolPermission` in `~/.gemini/antigravity-cli/settings.json`). With `always-proceed`, live checks (agy 1.5.11) saw reads, edits, shell commands and writes outside the workspace run with no request at all; `accept-edits` writes without asking by design. Every request agyd does answer is logged as a `permission decision` line. Run agyd in a folder you are willing to have changed.
 
 ## Troubleshooting
 
