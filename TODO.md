@@ -7,7 +7,7 @@
 
 ## Now
 
-(no active plan; `PLAN-folder-isolation` completed 2026-11-19)
+(no active plan; `PLAN-2026-11-19-1214-plan-server-structured-logging-2026-11-19` completed 2026-11-19)
 
 ## Next
 
