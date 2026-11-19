@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/acp"
 )
 
 func newTextLogger(w io.Writer) *slog.Logger { return slog.New(slog.NewTextHandler(w, nil)) }

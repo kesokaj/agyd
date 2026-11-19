@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"agyd/internal/api"
+	"github.com/kesokaj/agyd/internal/api"
 )
 
 func TestWebRoutes(t *testing.T) {

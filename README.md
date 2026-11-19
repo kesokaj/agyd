@@ -1,6 +1,6 @@
 # agyd
 
-**A minimal HTTP + Server-Sent Events (SSE) API and Swagger UI in front of the `agy` CLI you already have installed.** Run `agyd` to expose a local REST/SSE wrapper over `agy acp` with interactive docs at `http://127.0.0.1:8080/docs`, plus a thin control-plane CLI for managing conversations, models, and defaults. It reuses your existing `~/.gemini` login — no Docker, no API keys, and no extra setup.
+**A lightweight local HTTP and Server-Sent Events (SSE) server for the Antigravity CLI (`agy`), with interactive Swagger UI and a companion control-plane CLI.** Run `agyd` to expose a REST and streaming API over `agy acp` (Agent Client Protocol v1 over stdio) with interactive documentation at `http://127.0.0.1:8080/docs`. It reuses your existing host `~/.gemini` login without requiring Docker, API tokens, or credential copying.
 
 ```mermaid
 flowchart LR
@@ -10,282 +10,494 @@ flowchart LR
   agy -.->|"reads, writes, runs"| WS["your workspace"]
 ```
 
+## Install
+
+`agyd` runs on macOS (`darwin`) and Linux across `arm64` and `amd64` architectures. Before installing, ensure you have the `agy` CLI installed on your `PATH` and already signed in (if running `agy` in your terminal succeeds, you are ready).
+
+### Option 1: One-liner installer (recommended)
+
+Download and install the latest verified release binary to `~/.local/bin/agyd`:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kesokaj/agyd/main/install.sh | bash
+```
+
+To install a specific version or target a custom directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/kesokaj/agyd/main/install.sh | bash -s -- --version v0.2.0 --dir /usr/local/bin
+```
+
+The installer verifies SHA-256 checksums from `checksums.txt` over HTTPS before installing.
+
+### Option 2: Go install
+
+If you have Go 1.27 or newer installed:
+
+```bash
+go install github.com/kesokaj/agyd/cmd/agyd@latest
+```
+
+### Option 3: Build from source
+
+Clone the repository and build the binary matching `AGENTS.md` § Setup:
+
+```bash
+git clone https://github.com/kesokaj/agyd.git && cd agyd
+go build -o bin/ ./cmd/agyd
+```
+
 ## Quick start
 
-Start `agyd` in your project folder and send your first prompt over HTTP in under a minute. You need **Go 1.27+** and a working **`agy`** binary on your `PATH`, already signed in (if `agy` runs interactively in your terminal, you are set).
+Start `agyd` in your project folder and send your first prompt over HTTP in three steps:
 
-1. Build `agyd` and start it from the workspace folder you want the agent to use:
+1. **Start `agyd` in the folder you want the agent to work in:**
 
    ```bash
-   gh repo clone kesokaj/agyd && cd agyd
-   go build -o bin/ ./cmd/agyd    # writes bin/agyd
-   export PATH="$PWD/bin:$PATH"   # or copy bin/agyd to a folder on your PATH
-   cd ~/code/my-project           # the folder the agent should work in
+   cd ~/code/my-project
    agyd
    ```
 
-   The first time you run `agyd` in a terminal, it asks which model and thinking level to use and offers to save them as your defaults. Press Enter to accept `agy`'s default.
+   The first time you start `agyd` in an interactive terminal, it presents a model picker and offers to save your choices to `state.json`. Press Enter to keep `agy`'s default model.
 
-2. Prompt the server immediately from a **second terminal** with `curl`:
+2. **Send your first prompt and follow up from a second terminal:**
 
    ```bash
    curl -fsS -X POST http://127.0.0.1:8080/v1/prompt \
      -H 'Content-Type: application/json' \
      -d '{"prompt": "Summarize this repository in two sentences."}' | jq -r .text
 
-   # Follow up in the same current conversation (it remembers)
+   # Follow up in the same active conversation (it remembers)
    curl -fsS -X POST http://127.0.0.1:8080/v1/prompt \
      -H 'Content-Type: application/json' \
      -d '{"prompt": "Now list its top-level directories."}' | jq -r .text
    ```
 
-Prefer a browser? Open **http://127.0.0.1:8080/docs** and click **Try it out** under any endpoint.
+3. **Explore interactive Swagger UI in your browser:**
+
+   Open **http://127.0.0.1:8080/docs** to test every endpoint with interactive request builders and live responses.
 
 > [!IMPORTANT]
 > The agent works in the folder you start `agyd` from, unless you set `-workspace` or start a conversation elsewhere (`agyd new` uses the folder you run it from). `agyd` runs one `agy acp` process per active workspace folder (started on the first conversation there and stopped when its last live conversation closes), keeping each folder's workspace roots isolated. By default it approves its own tool calls (file writes, shell commands). See [Safety](#safety).
 
-## HTTP API
+## Examples
 
-`agyd` exposes a strict, verbatim ACP v1 wrapper over buffered JSON and streaming SSE, alongside endpoints for conversations, models, and saved defaults. Every client — `curl`, scripts, Swagger UI, and the `agyd` control-plane CLI — calls the same `/v1/*` API.
+Practical, copy-pasteable patterns for interacting with `agyd` over HTTP, streaming SSE, and the control-plane CLI.
 
-### Prompt (buffered JSON)
+### 1. Buffered JSON prompt & inspecting response fields
 
-Send a prompt to `POST /v1/prompt` (the current conversation, auto-created if none exists) or `POST /v1/conversations/{id}/prompt` (a specific live conversation):
+Send a prompt and inspect the full response envelope using `jq`:
 
 ```bash
 curl -fsS -X POST http://127.0.0.1:8080/v1/prompt \
   -H 'Content-Type: application/json' \
-  -d '{"prompt": "Summarize this repository in two sentences."}' | jq -r .text
+  -d '{"prompt": "Explain what this repo does."}' | jq '{
+    stopReason: .stopReason,
+    totalTokens: .usage.totalTokens,
+    text: .text,
+    updateCount: (.updates | length)
+  }'
 ```
 
-The JSON response wraps ACP v1 verbatim rather than inventing a custom item schema, returning `conversationId`, `model`, `thinkingLevel`, `mode`, `stopReason`, `usage`, `text`, and `updates`:
+The response contains `.text` (verbatim concatenated agent output), `.stopReason`, `.usage`, and `.updates` (verbatim ACP v1 `session/update` events in arrival order, always serialized as an array).
 
-- **`.text`** — the verbatim concatenation of ACP `agent_message_chunk` text chunks, never stripped or rewritten.
-- **`.updates`** — **always** a JSON array (`[]` when empty, never `null` and never omitted) containing the verbatim ACP v1 `session/update` objects in arrival order (thoughts, tool calls, tool updates, and message chunks).
+### 2. Live SSE streaming
 
-### Stream live (SSE)
-
-Add `Accept: text/event-stream` to `POST /v1/prompt` or `POST /v1/conversations/{id}/prompt` to stream events while the agent works:
+Pass `Accept: text/event-stream` to receive real-time updates as the agent reasons and executes tool calls:
 
 ```bash
 curl -N -sS -X POST http://127.0.0.1:8080/v1/prompt \
-  -H 'Accept: text/event-stream' -H 'Content-Type: application/json' \
-  -d '{"prompt": "List the top-level directories."}'
+  -H 'Accept: text/event-stream' \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "Run tests and summarize results."}'
 ```
 
-| Event | When | `data` |
+Streaming SSE emits three event types:
+
+| Event | When | `data` payload |
 |---|---|---|
-| `session_update` | Every ACP update in arrival order | Verbatim ACP v1 `session/update` object (text, thoughts, tool calls) |
-| `prompt_done` | The turn finished | Same shape as buffered JSON, **without** `updates` |
-| `prompt_error` | The turn failed | AIP-193 error object |
+| `session_update` | Every ACP update in arrival order | Verbatim ACP v1 `session/update` object (thoughts, tool calls, text chunks) |
+| `prompt_done` | Turn completed successfully | Metadata, usage, and concatenated `.text` (omits `.updates`) |
+| `prompt_error` | Turn failed | AIP-193 error object (`code`, `status`, `message`, `details`) |
 
-### Visibility headers
-
-Every `/healthz` and `/v1/*` response names the current conversation in HTTP headers (omitted when none is set):
-
-```text
-Agyd-Conversation: 2652ba62-...
-Agyd-Model: gemini-4-carbon
-Agyd-Thinking-Level: high
-Agyd-Mode: default
-```
-
-### Fixed conversations for scripts
-
-The current conversation is shared by every client. A script that must stay isolated from `agyd use` elsewhere creates its own conversation with `"use": false`, addresses it by ID, and deletes it when finished:
+To filter live message text chunks in bash:
 
 ```bash
-ID=$(curl -fsS -X POST http://127.0.0.1:8080/v1/conversations \
+curl -N -sS -X POST http://127.0.0.1:8080/v1/prompt \
+  -H 'Accept: text/event-stream' \
   -H 'Content-Type: application/json' \
-  -d '{"cwd": "/Users/me/code/other", "model": "gemini-4-carbon", "use": false}' | jq -r .conversationId)
-curl -fsS -X POST "http://127.0.0.1:8080/v1/conversations/$ID/prompt" \
-  -H 'Content-Type: application/json' -d '{"prompt": "hi"}' | jq -r .text
-curl -X DELETE "http://127.0.0.1:8080/v1/conversations/$ID"
+  -d '{"prompt": "Explain the project layout."}' \
+  | grep '^data: ' | sed 's/^data: //' \
+  | jq -r 'select(.update.sessionUpdate == "agent_message_chunk") | .update.content.text // empty'
 ```
 
-`"use": false` leaves the current conversation untouched. Each conversation handles **one turn at a time**: a second prompt or model change while a turn runs returns `409 PROMPT_IN_FLIGHT`.
+### 3. Multi-folder & isolated scripts
 
-### Endpoints and errors
+The current conversation is shared by interactive callers. Automated scripts that must run isolated create a dedicated conversation with `"use": false`, prompt it by ID, and delete it when finished:
 
-Browse the full interactive contract at `GET /docs` (Swagger UI) or fetch the OpenAPI 3.1 document at `GET /openapi.json`.
+```bash
+# Create an isolated conversation without switching the active one
+CONV_ID=$(curl -fsS -X POST http://127.0.0.1:8080/v1/conversations \
+  -H 'Content-Type: application/json' \
+  -d '{"cwd": "/Users/me/code/backend", "model": "gemini-4-carbon", "use": false}' \
+  | jq -r .conversationId)
 
-> [!NOTE]
-> Before ADR-005 these paths were `/v1/sessions/...` with a `sessionId` field. They are now `/v1/conversations/...` and `conversationId`; the old paths return `404`.
+# Send a prompt to the specific conversation
+curl -fsS -X POST "http://127.0.0.1:8080/v1/conversations/${CONV_ID}/prompt" \
+  -H 'Content-Type: application/json' \
+  -d '{"prompt": "Check code status."}' | jq -r .text
+
+# Clean up when finished
+curl -fsS -X DELETE "http://127.0.0.1:8080/v1/conversations/${CONV_ID}"
+```
+
+Each conversation handles one turn at a time. A second prompt or settings update while a turn is active returns `409 PROMPT_IN_FLIGHT`.
+
+### 4. Switching models & thinking levels
+
+Inspect available models and change settings dynamically without restarting the server:
+
+```bash
+# Check models supported by the installed agy binary
+agyd models
+
+# Switch model and thinking level on the current conversation
+agyd model gemini-4-carbon --thinking high
+
+# Alternatively via HTTP PATCH
+curl -fsS -X PATCH http://127.0.0.1:8080/v1/current \
+  -H 'Content-Type: application/json' \
+  -d '{"model": "gemini-4-carbon", "thinkingLevel": "high"}'
+
+# Update saved defaults for future conversations
+agyd defaults --model gemini-4-carbon --thinking high
+```
+
+### 5. Context clearing, cancellation & history resume
+
+Manage conversation lifecycles and recover context cleanly:
+
+```bash
+# Start a fresh conversation in the same directory preserving settings (old stays in history)
+agyd clear
+# Or via HTTP:
+curl -fsS -X POST http://127.0.0.1:8080/v1/clear
+
+# Cancel an in-flight prompt turn
+curl -fsS -X POST http://127.0.0.1:8080/v1/cancel
+
+# List recent conversations from agyd and IDE/agy CLI history
+agyd list
+
+# Resume an earlier conversation by ID
+agyd use 2652ba62-a1b2-4c3d-8e4f-5061728394a5
+```
+
+### 6. Client libraries (Python & Node.js)
+
+Call `agyd` from standard language runtimes without external dependencies:
+
+<details>
+<summary>Python example (stdlib urllib, zero dependencies)</summary>
+
+```python
+import json
+import urllib.request
+
+# 1. Buffered JSON Prompt
+req = urllib.request.Request(
+    "http://127.0.0.1:8080/v1/prompt",
+    data=json.dumps({"prompt": "Summarize recent changes."}).encode("utf-8"),
+    headers={"Content-Type": "application/json"},
+    method="POST",
+)
+with urllib.request.urlopen(req) as resp:
+    data = json.loads(resp.read().decode("utf-8"))
+    print("Agent reply:", data.get("text"))
+
+# 2. Streaming SSE Prompt
+stream_req = urllib.request.Request(
+    "http://127.0.0.1:8080/v1/prompt",
+    data=json.dumps({"prompt": "List files."}).encode("utf-8"),
+    headers={
+        "Content-Type": "application/json",
+        "Accept": "text/event-stream",
+    },
+    method="POST",
+)
+with urllib.request.urlopen(stream_req) as stream_resp:
+    for line in stream_resp:
+        line_str = line.decode("utf-8").strip()
+        if line_str.startswith("data: "):
+            chunk = json.loads(line_str[6:])
+            update = chunk.get("update", {})
+            if update.get("sessionUpdate") == "agent_message_chunk":
+                print(update.get("content", {}).get("text", ""), end="", flush=True)
+print()
+```
+
+</details>
+
+<details>
+<summary>Node.js example (built-in fetch, zero dependencies)</summary>
+
+```javascript
+// 1. Buffered JSON Prompt
+async function runPrompt() {
+  const res = await fetch("http://127.0.0.1:8080/v1/prompt", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ prompt: "Summarize recent changes." }),
+  });
+  const data = await res.json();
+  console.log("Agent reply:", data.text);
+}
+
+// 2. Streaming SSE Prompt
+async function streamPrompt() {
+  const res = await fetch("http://127.0.0.1:8080/v1/prompt", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "Accept": "text/event-stream",
+    },
+    body: JSON.stringify({ prompt: "List files." }),
+  });
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+
+    for (const line of lines) {
+      if (line.startsWith("data: ")) {
+        const payload = JSON.parse(line.slice(6));
+        if (payload.update?.sessionUpdate === "agent_message_chunk") {
+          process.stdout.write(payload.update.content?.text || "");
+        }
+      }
+    }
+  }
+  process.stdout.write("\n");
+}
+
+runPrompt().then(() => streamPrompt());
+```
+
+</details>
+
+### 7. Scripting the CLI with `--json` and custom endpoints
+
+The `agyd` CLI prints human-readable tables by default, but supports `--json` to output raw API responses for pipelines:
+
+```bash
+# Extract active conversation ID
+CURRENT_ID=$(agyd current --json | jq -r .conversationId)
+
+# Point CLI at a server on a custom port or remote host
+agyd list --port 9090
+export AGYD_URL="http://127.0.0.1:9090"
+agyd current
+```
+
+### 8. LAN access and container operation
+
+For testing across local devices or in isolated container environments:
+
+```bash
+# Listen on all interfaces with safe permissions
+agyd -host 0.0.0.0 -port 8080 -permission-policy deny_all
+```
+
+When running in Docker:
+
+- Set `AGYD_HOST=0.0.0.0` and configure `AGYD_STATE_DIR=/data/state`.
+- Mount volumes for `AGYD_STATE_DIR` and host `~/.gemini` (persisting login credentials and session history).
+- Pass `--init` (`docker run --init ...`) so child `agy acp` processes are properly reaped.
+
+## HTTP API & Control-plane CLI
+
+`agyd` exposes a strict ACP v1 wrapper alongside management endpoints for conversations, models, and defaults. The `agyd` CLI acts as a lightweight control plane backed 1:1 by `/v1/*`.
+
+| Task | CLI | HTTP |
+|---|---|---|
+| Show current conversation | `agyd current` | `GET /v1/current` |
+| List conversations (`*` marks current) | `agyd list` | `GET /v1/conversations` |
+| Start fresh in this folder | `agyd new [--model M] [--thinking T] [--mode X]` | `POST /v1/conversations` |
+| Switch conversation | `agyd use <id>` | `POST /v1/conversations/{id}/use` |
+| Clear context (same folder and settings) | `agyd clear [<id>]` | `POST /v1/clear`, `POST /v1/conversations/{id}/clear` |
+| Change model, thinking, or mode | `agyd model [<family>] [--thinking T] [--mode X]` | `PATCH /v1/current` |
+| Inspect available models | `agyd models` | `GET /v1/models` |
+| View or save defaults | `agyd defaults [--model M] [--thinking T] [--mode X]` | `GET /v1/defaults`, `PUT /v1/defaults` |
+
+Every `/healthz` and `/v1/*` response names the active conversation via `Agyd-*` headers (`Agyd-Conversation`, `Agyd-Model`, `Agyd-Thinking-Level`, `Agyd-Mode`).
 
 <details>
 <summary>All HTTP endpoints (21 routes)</summary>
 
-| Method | Path | What it does |
+| Method | Path | Purpose |
 |---|---|---|
-| `GET` | `/docs` | Swagger UI (`/` redirects here) |
-| `GET` | `/openapi.json` | OpenAPI 3.1 spec for client generators |
-| `GET` | `/healthz` | Liveness and service identity: `200` `{"service":"agyd"}` |
-| `GET` | `/v1/status` | Agent readiness, version, policy, workspace |
-| `GET` | `/v1/current` | The current conversation (`404` if none) |
-| `PATCH` | `/v1/current` | Change its `model`, `thinkingLevel`, or `mode` |
-| `POST` | `/v1/prompt` | Run a turn on the current conversation (creates one if needed): buffered JSON, or SSE with `Accept: text/event-stream` |
-| `POST` | `/v1/cancel` | Cancel the current conversation's running turn |
-| `POST` | `/v1/clear` | Start a new current conversation with the current one's folder and settings (old stays in history) |
-| `POST` | `/v1/conversations` | Create one (`cwd`, `model`, `thinkingLevel`, `mode`, `use`; all optional). Becomes current unless `"use": false` |
-| `GET` | `/v1/conversations` | List live conversations and `agy`'s history, newest first (`?cwd=` filters) |
-| `GET` | `/v1/conversations/{id}` | One conversation |
-| `PATCH` | `/v1/conversations/{id}` | Change its settings |
-| `DELETE` | `/v1/conversations/{id}` | End it (`204`). Ending the current one clears the pointer |
-| `POST` | `/v1/conversations/{id}/prompt` | Run a turn on that conversation (buffered JSON or SSE) |
-| `POST` | `/v1/conversations/{id}/cancel` | Cancel its running turn |
-| `POST` | `/v1/conversations/{id}/use` | Make it current (resumes it if it is not live) |
-| `POST` | `/v1/conversations/{id}/clear` | Start a new current conversation with `{id}`'s folder and settings (old stays in history) |
-| `GET` | `/v1/models` | Models, thinking levels, and modes `agy` offers |
-| `GET` | `/v1/defaults` | Defaults for new conversations |
-| `PUT` | `/v1/defaults` | Change the defaults and save them to `state.json` |
+| `GET` | `/docs` | Interactive Swagger UI documentation (`/` redirects here) |
+| `GET` | `/openapi.json` | OpenAPI 3.1 specification |
+| `GET` | `/healthz` | Liveness and service identity check: `200 {"service":"agyd"}` |
+| `GET` | `/v1/status` | Backend readiness, agent version, permission policy, workspace |
+| `GET` | `/v1/current` | Inspect current conversation (`404` if none active) |
+| `PATCH` | `/v1/current` | Update settings (`model`, `thinkingLevel`, `mode`) on current conversation |
+| `POST` | `/v1/prompt` | Run turn on current conversation (auto-creates if needed; buffered JSON or SSE) |
+| `POST` | `/v1/cancel` | Cancel running turn on current conversation |
+| `POST` | `/v1/clear` | Start fresh current conversation in same folder with current settings (`201`) |
+| `POST` | `/v1/conversations` | Create conversation (`cwd`, `model`, `thinkingLevel`, `mode`, `use`) |
+| `GET` | `/v1/conversations` | List live and remembered conversations (`?cwd=` filters) |
+| `GET` | `/v1/conversations/{id}` | Inspect one conversation |
+| `PATCH` | `/v1/conversations/{id}` | Update settings on specific conversation |
+| `DELETE` | `/v1/conversations/{id}` | End conversation (`204`). Ending current clears active pointer |
+| `POST` | `/v1/conversations/{id}/prompt` | Run turn on specific conversation (buffered JSON or SSE) |
+| `POST` | `/v1/conversations/{id}/cancel` | Cancel running turn on specific conversation |
+| `POST` | `/v1/conversations/{id}/use` | Make specific conversation current (resumes if not live) |
+| `POST` | `/v1/conversations/{id}/clear` | Start fresh current conversation with `{id}` folder and settings (`201`) |
+| `GET` | `/v1/models` | Available models, thinking levels, and agent modes |
+| `GET` | `/v1/defaults` | Current defaults applied to new conversations |
+| `PUT` | `/v1/defaults` | Persist new defaults to `state.json` |
 
 </details>
 
 <details>
-<summary>Errors (AIP-193 shape and status codes)</summary>
+<summary>Errors (AIP-193 format & status codes)</summary>
 
-Every error has the same shape (Google AIP-193):
+Errors follow the Google AIP-193 structure:
 
 ```json
-{"error": {"code": 409, "status": "ABORTED", "message": "a prompt turn is in flight for this conversation", "details": [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": "PROMPT_IN_FLIGHT", "domain": "agyd.local"}]}}
+{
+  "error": {
+    "code": 409,
+    "status": "ABORTED",
+    "message": "a prompt turn is in flight for this conversation",
+    "details": [
+      {
+        "@type": "type.googleapis.com/google.rpc.ErrorInfo",
+        "reason": "PROMPT_IN_FLIGHT",
+        "domain": "agyd.local"
+      }
+    ]
+  }
+}
 ```
 
-| HTTP | Reason | Meaning |
+| HTTP | Reason | Description |
 |---|---|---|
-| 400 | `MALFORMED_BODY`, `INVALID_CWD`, `INVALID_SETTING` | Bad JSON or trailing data after the JSON value; `cwd` is not a clean absolute path of an existing real directory, contains a symlink (the error names the real path), or is inside `.gemini` (in any letter case); a model, thinking level, or mode `agy` does not offer |
-| 401 | `ACP_AUTH_REQUIRED` | `agy` is not signed in. Run `agy` once, or `agy acp --login` |
-| 403 | `FORBIDDEN_HOST`, `CROSS_ORIGIN_REQUEST` | The request's `Host` header is not an address `agyd` accepts (loopback, or with `-host` this machine's IPs and hostname); a browser sent a cross-origin write |
-| 404 | `NOT_FOUND`, `CONVERSATION_NOT_FOUND`, `NO_CURRENT_CONVERSATION` | Unknown path; unknown or ended conversation; or nothing is current yet |
-| 405 | `METHOD_NOT_ALLOWED` | Known path (API or web), wrong method. The `Allow` header lists the right ones |
-| 409 | `PROMPT_IN_FLIGHT` | That conversation is running a turn |
-| 413 | `BODY_TOO_LARGE` | The request body is over 1 MiB |
-| 502 | `ACP_RPC_ERROR`, `ACP_PROCESS_EXITED` | `agy` returned an error or exited. It restarts on the next call |
-| 503 | `MODELS_UNKNOWN` | `agyd` has not seen `agy`'s model list yet (no conversation started) |
+| 400 | `MALFORMED_BODY`, `INVALID_CWD`, `INVALID_SETTING` | Malformed JSON or trailing bytes; `cwd` is not an existing real directory, contains symlinks (error reports real path), or resides under `.gemini`; unsupported model/thinking/mode |
+| 401 | `ACP_AUTH_REQUIRED` | `agy` is not signed in. Run `agy` once interactively |
+| 403 | `FORBIDDEN_HOST`, `CROSS_ORIGIN_REQUEST` | Host header mismatch (DNS rebinding defense); cross-origin browser write |
+| 404 | `NOT_FOUND`, `CONVERSATION_NOT_FOUND`, `NO_CURRENT_CONVERSATION` | Unknown route; unknown or closed conversation; no active conversation set |
+| 405 | `METHOD_NOT_ALLOWED` | Wrong HTTP method; `Allow` response header indicates valid methods |
+| 409 | `PROMPT_IN_FLIGHT` | A prompt turn is already running on that conversation |
+| 413 | `BODY_TOO_LARGE` | Request payload exceeds 1 MiB limit |
+| 502 | `ACP_RPC_ERROR`, `ACP_PROCESS_EXITED` | Underlying `agy acp` process error or unexpected termination |
+| 503 | `MODELS_UNKNOWN` | Available models unknown before first conversation initialization |
 
 </details>
 
-## Conversations
-
-`agyd` maintains one **current conversation** across restarts, and the `agyd` CLI provides a thin control plane backed 1:1 by `/v1/*` to inspect and manage conversations, models, and saved defaults. Send prompts over HTTP (`POST /v1/prompt` or `/docs`) rather than the CLI; every control-plane subcommand prints readable table or text output by default, writes the active conversation summary to `stderr`, and accepts `--json` for scripts.
-
-| Task | CLI | HTTP |
-|---|---|---|
-| Show the current conversation | `agyd current` | `GET /v1/current` |
-| List all conversations (`*` marks current) | `agyd list` | `GET /v1/conversations` |
-| Start fresh in this folder | `agyd new [--model M] [--thinking T] [--mode X]` | `POST /v1/conversations` |
-| Switch to another conversation | `agyd use <id>` | `POST /v1/conversations/{id}/use` |
-| Clear context (same folder and settings) | `agyd clear [<id>]` | `POST /v1/clear`, `POST /v1/conversations/{id}/clear` |
-| Change model, thinking, or mode now | `agyd model [<family>] [--thinking T] [--mode X]` | `PATCH /v1/current` |
-| See what `agy` offers | `agyd models` | `GET /v1/models` |
-| View or save defaults to `state.json` | `agyd defaults [--model M] [--thinking T] [--mode X]` | `GET /v1/defaults`, `PUT /v1/defaults` |
-
-`agyd list` shows every `agy` conversation on this machine, including sessions from the IDE or the `agy` CLI, and `agyd use` resumes any of them. Run `agyd help` to list every control-plane command and its shared flags (`--json`, `--host`, `--port`).
-
-```bash
-agyd new --model claude-sonnet-5-5 --thinking low
-agyd model gemini-4-carbon --thinking high     # same conversation, new model
-agyd list
-agyd current --json
-```
-
 ## Configuration
 
-Server settings resolve from CLI flags, `AGYD_*` shell environment variables, saved defaults in `state.json`, and built-in defaults, with the highest layer winning. Startup flags and environment variables override saved defaults for the running process without overwriting `state.json` on disk.
+Server configuration resolves using a strict hierarchy, where higher layers override lower layers. Command-line flags and environment variables take precedence without modifying `state.json` on disk.
 
 ```mermaid
 flowchart LR
-  F["flags"] --> E["shell env\n(AGYD_*)"] --> S["state.json\n(saved defaults)"] --> D["built-in defaults"]
+  F["CLI flags"] --> E["Shell env\n(AGYD_*)"] --> S["state.json\n(saved defaults)"] --> D["Built-in defaults"]
 ```
 
-| Flag | Env var | Default | What it does |
+<details>
+<summary>Full configuration reference (12 settings & runtime details)</summary>
+
+| Flag | Environment variable | Default | Purpose |
 |---|---|---|---|
-| `-model` | `AGYD_MODEL` | `agy`'s default | Model for new conversations, for example `gemini-4-carbon` (`agyd models` lists them) |
-| `-thinking` | `AGYD_THINKING` | `agy`'s default | Thinking level: `low`, `medium`, or `high` |
-| `-mode` | `AGYD_MODE` | `agy`'s default | Agent mode: `default`, `accept-edits`, or `plan` |
-| `-no-prompt` | `AGYD_NO_PROMPT` | `false` | Never ask for the model at startup |
-| `-host` | `AGYD_HOST` | `127.0.0.1` | Listen address: an IP or `localhost`. `0.0.0.0` listens on all IPv4 interfaces, `::` on all IPv6 ones (see [Safety](#safety)) |
-| `-port` | `AGYD_PORT` | `8080` (then `3000`) | Listen port (falls back to `3000` when unset and `8080` is taken; explicit port never falls back) |
-| `-workspace` | `AGYD_WORKSPACE` | current folder | Default folder for new conversations (real path, no symlinks) |
+| `-model` | `AGYD_MODEL` | `agy` default | Model for new conversations (for example `gemini-4-carbon`) |
+| `-thinking` | `AGYD_THINKING` | `agy` default | Thinking level: `low`, `medium`, or `high` |
+| `-mode` | `AGYD_MODE` | `agy` default | Agent mode: `default`, `accept-edits`, or `plan` |
+| `-no-prompt` | `AGYD_NO_PROMPT` | `false` | Skip interactive startup model picker |
+| `-host` | `AGYD_HOST` | `127.0.0.1` | Listen address: IP or `localhost`. `0.0.0.0` binds all interfaces (warned) |
+| `-port` | `AGYD_PORT` | `8080` (then `3000`) | Listen port (falls back to `3000` when unset and `8080` held; explicit port never falls back) |
+| `-workspace` | `AGYD_WORKSPACE` | current folder | Default folder for new conversations (clean real path, no symlinks) |
 | `-state-dir` | `AGYD_STATE_DIR` | `~/.config/agyd` | Directory holding `state.json` (must be absolute) |
-| `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for agent tool calls |
+| `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for ACP tool calls |
 | `-log-level` | `AGYD_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, or `error` (case-insensitive) |
-| `-agy` | `AGYD_AGY` | `agy` | Path to the `agy` binary |
-| `-acp-args` | `AGYD_ACP_ARGS` | `acp` | Space-separated arguments forwarded to the `agy` binary |
+| `-agy` | `AGYD_AGY` | `agy` | Path or name of `agy` binary |
+| `-acp-args` | `AGYD_ACP_ARGS` | `acp` | Space-separated arguments forwarded to `agy` |
 
-- **`-log-level` / `AGYD_LOG_LEVEL`:** defaults to `info`. Configures structured JSON logging to `stdout` (`debug`, `info`, `warn`, or `error`; case-insensitive). Any invalid value exits 1 immediately with a `"configuration error"` log message.
-  - **`INFO` (default):** logs startup `settings` (including `logLevel`), `/v1/*` and error (`4xx`/`5xx`) `"http request"` access logs (`method`, `path`, `status`, `durationMs`, optional `conversationId`, `canceled`), metadata-only `"prompt started"` and `"prompt finished"` turn events (`conversationId`, `model`, `thinkingLevel`, `mode`, `stream`, `stopReason`, `durationMs`, `updates`, `totalTokens`), conversation lifecycle events (`conversation created`, `conversation cleared`, `conversation switched`, `conversation updated`, `conversation deleted`, `defaults updated`), and ACP subprocess lifecycle (`acp process started`, `acp process stopped`, `acp process exited unexpectedly` at `WARN`).
-  - **`DEBUG`:** additionally emits `2xx`/`3xx` quiet-route access logs (`/healthz`, `/`, `/docs`, `/openapi.json`, `/static/*`) and raw child `acp stderr` output (capped at 4 KiB/line, suppressed at default `info`); `-log-level debug` is intended for temporary local troubleshooting only.
-  - **Strict privacy rule:** prompt text, reply text, tool-call arguments, query strings, and raw ACP `session/update` payloads are never logged at any level.
-- **`-acp-args` / `AGYD_ACP_ARGS`:** defaults to `acp`. Space-separated arguments forwarded directly to the `agy` binary — for example, `agyd -acp-args "acp --..."` when you need to pass extra flags to `agy`.
-- **`state.json`:** lives in `AGYD_STATE_DIR` (must be an absolute path when set), else `$XDG_CONFIG_HOME/agyd/` (when absolute), else `~/.config/agyd/`. It is flat, holding `currentConversationId`, `defaults` (`model`, `thinkingLevel`, `mode`), and `conversations` (remembered folders and settings). It is written atomically via temp file + sync + rename with mode `0600` (directory `0700`) and read non-blocking (`O_NONBLOCK`) as a regular file capped at 4 MiB.
-- **Saved defaults:** written to `state.json` by the startup question, `agyd defaults --model ...`, and `PUT /v1/defaults`. Startup flags or environment variables override saved defaults for the running process without overwriting `state.json` on disk.
-- **The startup question:** appears only in an interactive terminal when no flag, environment variable, or saved default sets a model. `-no-prompt`, or starting without a terminal, skips the question and uses `agy`'s default.
-- **CLI server discovery:** the CLI finds the server through `--host`/`--port`, then `AGYD_URL`, then `AGYD_HOST`/`AGYD_PORT` in your shell; otherwise it probes `GET /healthz` on `8080` then `3000`, accepting only `200` JSON `{"service":"agyd"}` (neither `config.env` nor `./.env` are read). `0.0.0.0` and `::` dial loopback.
+### Logging details & privacy guarantees
 
-```bash
-agyd -port 9090 -workspace ~/code/sandbox -permission-policy deny_all
-agyd current --port 9090
-curl -fsS -X POST http://127.0.0.1:9090/v1/prompt \
-  -H 'Content-Type: application/json' -d '{"prompt": "hello"}' | jq -r .text
-```
+- **Structured JSON on `stdout`:** logs are emitted in JSON format with `timestamp`, `severity`, and `message`. Invalid log levels exit 1 with `"configuration error"`.
+- **`INFO` level (default):** logs startup settings, `/v1/*` access logs with duration and status, metadata-only prompt turn logs (`prompt started`, `prompt finished` with duration, update count, and token totals), conversation lifecycle events, and subprocess lifecycle.
+- **`DEBUG` level:** additionally emits access logs for quiet routes (`/healthz`, `/docs`, `/openapi.json`, `/static/*`) and child `acp stderr` lines (capped at 4 KiB per line, discarded at `INFO`).
+- **Strict privacy rule:** prompt text, reply text, tool-call arguments, query strings, and raw ACP payload bodies are never logged at any level.
 
-### Reaching agyd from another device
+### State storage (`state.json`)
 
-Start `agyd` bound to all interfaces:
+- Stored in `AGYD_STATE_DIR` (must be absolute), else `$XDG_CONFIG_HOME/agyd/`, else `~/.config/agyd/`.
+- Stores `currentConversationId`, saved `defaults`, and remembered `conversations`.
+- Written atomically via temporary file, sync, and rename with mode `0600` (directory `0700`).
+- Read non-blocking (`O_NONBLOCK`) as a regular file capped at 4 MiB.
 
-```bash
-agyd -host 0.0.0.0 -port 8080
-```
+### CLI server discovery
 
-Then open `http://<your-machine-ip>:8080/docs` from the other device, call `POST http://<your-machine-ip>:8080/v1/prompt` with `curl`, or run `agyd current --host <your-machine-ip>` there. At startup `agyd` logs a warning listing the addresses it accepts: your machine's IPs and its hostname. macOS may ask whether to allow incoming connections.
+The `agyd` CLI locates the server in order of: `--host`/`--port` flags > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > probing `GET /healthz` on `8080` then `3000`. Addresses `0.0.0.0` and `::` connect to loopback.
 
-### Running in a container
-
-To run `agyd` inside a container:
-
-- **Configure via `AGYD_*` env vars:** set `AGYD_HOST=0.0.0.0` to accept external traffic, configure `AGYD_STATE_DIR=/data/state`, and provide any model or mode flags. Non-TTY stdin automatically skips the startup picker. Logs stream as structured JSON on stdout, and `SIGTERM` stops the server cleanly with state already synced to disk.
-- **Persist two directories:** mount host volumes or named volumes for `AGYD_STATE_DIR` (or `~/.config/agyd`, storing `state.json`) and `~/.gemini` (where `agy` stores login credentials and history).
-- **Pass `--init`:** run containers with `docker run --init ...` (or an equivalent init process like tini) so `agy` child processes are properly reaped when `agyd` runs as PID 1.
+</details>
 
 ## Safety
 
-`agyd` is built for **one person on their own machine**. It protects access through loopback binding, `Host` header validation, and CSRF checks rather than an API token.
+`agyd` is designed for single-operator use on a trusted machine. Security is enforced through network binding, Host header checks, and CSRF protection rather than API tokens.
 
 > [!WARNING]
-> With the default `allow_all`, anything that can reach `agyd` can make the agent write files and run shell commands **as you**. On the default `127.0.0.1` that means local programs. With `-host 0.0.0.0` it means **anyone on your network**, because there is no API key. Only listen beyond loopback on a network you trust, and prefer `-permission-policy deny_all` when you do.
+> With the default `allow_all` policy, any process that reaches `agyd` can execute tool calls (write files, execute shell commands) with your user permissions. On `127.0.0.1` this is limited to local programs. When bound to `-host 0.0.0.0`, any device on your local network can trigger actions. Only bind beyond loopback on trusted networks, and prefer `-permission-policy deny_all`.
 
-- **Loopback by default.** Remote access only happens when you pass `-host`.
-- **Host check.** Requests must name `localhost`, `127.0.0.1`, or `::1`, or (with `-host`) one of your machine's own IPs or its hostname. Anything else gets `403`. This blocks DNS-rebinding attacks.
-- **CSRF protection.** Browser requests from other websites are blocked.
-- **No token.** There is no API key. The protection is the bind address plus the two checks above. Anyone who passes them can also list your `agy` conversations (titles included), switch the current one, and change your saved defaults in `state.json`.
-- **`deny_all` is not a sandbox.** It answers only the permission requests `agy` sends, and `agy` decides whether to send them from its own settings (`toolPermission` in `~/.gemini/antigravity-cli/settings.json`). With `always-proceed`, live checks (`agy` 1.5.11) saw reads, edits, shell commands, and writes outside the workspace run with no request at all; `accept-edits` writes without asking by design. Every request `agyd` does answer is logged as a `permission decision` line. Run `agyd` in a folder you are willing to have changed.
+- **Loopback default:** Remote connections are rejected unless `-host` is explicitly provided.
+- **Host header validation:** Requests must target `localhost`, `127.0.0.1`, `::1`, or the machine's detected network interfaces and hostnames. Other hostnames receive `403 FORBIDDEN_HOST`.
+- **CSRF defense:** Cross-origin browser write requests are blocked via Go stdlib protection.
+- **`deny_all` is not a full sandbox:** `deny_all` rejects only requests that `agy` forwards. If `agy`'s internal setting is configured to `always-proceed`, certain tool calls execute without asking. Every answered permission check is logged to `stdout`.
 
 ## Troubleshooting
 
-Use this table to resolve common startup, API, and control-plane CLI errors.
+Solutions for common configuration, authentication, and execution issues:
 
-| Symptom | Fix |
+| Issue | Resolution |
 |---|---|
-| `401 ACP_AUTH_REQUIRED` | Sign in: run `agy` once in a terminal, then retry |
-| `agyd` CLI cannot connect | Start `agyd` first, or point the CLI at it with `--port`, `AGYD_PORT`, or `AGYD_URL` |
-| `GET /v1/status` returns `500` or `502` | `agy` failed to start. Check it is on `PATH`, or pass `-agy /full/path/to/agy`, and read `agyd`'s log |
-| `400 INVALID_SETTING` | Use a value from `agyd models` |
-| `400 INVALID_CWD` | Use a real absolute path without symlinks, for example `"$(pwd -P)"` (or the real path named in the error), and not under `~/.gemini` |
-| `403 FORBIDDEN_HOST` | Use an address `agyd` accepts: `127.0.0.1`/`localhost`, or with `-host 0.0.0.0` one listed in its startup warning |
-| `404` on `/v1/sessions/...` | Renamed to `/v1/conversations/...` (ADR-005) |
-| `409 PROMPT_IN_FLIGHT` | Wait for the turn to finish, or cancel it first (`POST /v1/cancel` or `POST /v1/conversations/{id}/cancel`) |
-| Startup asks for a model every time | Answer `y` to "Save as default", or set `-model`/`AGYD_MODEL` |
-| Port already in use (`8080` and `3000`, or explicit `-port`) | Start with `agyd -port 9090`, then target `http://127.0.0.1:9090` or `agyd current --port 9090` (or `export AGYD_PORT=9090`) |
+| `401 ACP_AUTH_REQUIRED` | Sign in to `agy`: run `agy` once interactively in your terminal, then retry |
+| CLI cannot connect to server | Start `agyd` first, or specify connection with `--port`, `AGYD_PORT`, or `AGYD_URL` |
+| `GET /v1/status` returns `500` or `502` | `agy` failed to start. Verify `agy` is on `PATH` or pass `-agy /path/to/agy` |
+| `400 INVALID_SETTING` | Use a model, thinking level, or mode listed in `agyd models` |
+| `400 INVALID_CWD` | Provide an existing absolute path without symlinks, and not inside `~/.gemini` |
+| `403 FORBIDDEN_HOST` | Send a valid Host header (`localhost`, `127.0.0.1`, or host IP with `-host`) |
+| `404` on `/v1/sessions/...` | Endpoint renamed to `/v1/conversations/...` (ADR-005) |
+| `409 PROMPT_IN_FLIGHT` | Wait for turn completion or send `POST /v1/cancel` |
+| Startup prompts for model every time | Answer `y` to "Save as default", or set `-model` / `AGYD_MODEL` |
+| Default port in use (`8080` and `3000`) | Start on another port with `agyd -port 9090` and target `--port 9090` |
 
 ## Development
 
-Build the binary locally and run the deterministic unit and HTTP test suite without a real `agy` installation.
+Build the binary and execute the deterministic test suite:
 
 ```bash
-go build -o bin/ ./cmd/agyd         # build to bin/agyd (gitignored)
-go vet ./... && go test -race ./... # test (no real agy needed)
+# Build binary
+go build -o bin/ ./cmd/agyd
+
+# Run code vet and race detector tests
+go vet ./... && go test -race ./...
+
+# Verify release installer script
+shellcheck install.sh
 ```
 
-Layout: `cmd/agyd/` holds the server entry point and control-plane CLI, `internal/` holds the packages it uses, and `bin/` holds the build output.
+Architecture and technical design details are documented in [SDD.md](SDD.md) and [TDD.md](TDD.md).
 
-Design docs: [SDD.md](SDD.md) (architecture) and [TDD.md](TDD.md) (components and tests). Decisions, specs, and the testing guide live in the project trail: `fyr record list --kind adr`, `fyr record get GUIDE-testing`.
+## License
+
+This project is licensed under the [MIT License](LICENSE) (Copyright (c) 2026 kesokaj).
+
+The vendored Swagger UI distribution (`internal/web/static/swagger-ui/`) is licensed under the Apache License 2.0; see its bundled [LICENSE](internal/web/static/swagger-ui/LICENSE) and [NOTICE](internal/web/static/swagger-ui/NOTICE).

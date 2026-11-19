@@ -9,9 +9,9 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"agyd/internal/acp"
-	"agyd/internal/api"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/api"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 // settingsBody is the JSON body for create, PATCH and PUT defaults; empty
@@ -75,7 +75,7 @@ func runList(ctx context.Context, c *cli, _ *cliOpts, _ []string) error {
 		if it.Live {
 			live = "yes"
 		}
-		fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\t%s\t%s\n", mark, it.ConversationID, live,
+		fmt.Fprintf(tw, "%s %s\t%s\t%s\t%s\t%s\t%s\n", mark, sanitizeTerminal(it.ConversationID), live,
 			dash(it.Model), dash(it.ThinkingLevel), when(it), oneLine(it.Title, 60))
 	}
 	return tw.Flush()
@@ -131,7 +131,7 @@ func runModels(ctx context.Context, c *cli, _ *cliOpts, _ []string) error {
 			if v.Value == resp.Get(sec.header) {
 				mark = "*"
 			}
-			fmt.Fprintf(tw, "%s %s\t%s\n", mark, v.Value, v.Name)
+			fmt.Fprintf(tw, "%s %s\t%s\n", mark, sanitizeTerminal(v.Value), sanitizeTerminal(v.Name))
 		}
 	}
 	return tw.Flush()
@@ -169,16 +169,17 @@ func (c *cli) conversationCall(ctx context.Context, method, path string, body an
 
 func (c *cli) printConversation(conv conversation.Conversation) {
 	tw := tabwriter.NewWriter(c.env.stdout, 0, 4, 2, ' ', 0)
-	fmt.Fprintf(tw, "conversation\t%s\n", conv.ConversationID)
-	fmt.Fprintf(tw, "cwd\t%s\n", conv.Cwd)
-	if conv.Title != "" {
-		fmt.Fprintf(tw, "title\t%s\n", oneLine(conv.Title, 80))
+	fmt.Fprintf(tw, "conversation\t%s\n", sanitizeTerminal(conv.ConversationID))
+	fmt.Fprintf(tw, "cwd\t%s\n", sanitizeTerminal(conv.Cwd))
+	if title := oneLine(conv.Title, 80); title != "" {
+		fmt.Fprintf(tw, "title\t%s\n", title)
 	}
 	fmt.Fprintf(tw, "model\t%s\nthinking\t%s\nmode\t%s\n", dash(conv.Model), dash(conv.ThinkingLevel), dash(conv.Mode))
 	_ = tw.Flush()
 }
 
 func dash(s string) string {
+	s = sanitizeTerminal(s)
 	if s == "" {
 		return "-"
 	}
@@ -186,6 +187,7 @@ func dash(s string) string {
 }
 
 func agyDefault(s string) string {
+	s = sanitizeTerminal(s)
 	if s == "" {
 		return "(agy default)"
 	}
@@ -203,9 +205,9 @@ func when(c conversation.Conversation) string {
 	return t.Local().Format(time.DateTime[:16])
 }
 
-// oneLine flattens s to one line of at most n runes.
+// oneLine strips terminal control sequences and flattens s to one line of at most n runes.
 func oneLine(s string, n int) string {
-	s = strings.Join(strings.Fields(s), " ")
+	s = strings.Join(strings.Fields(sanitizeTerminal(s)), " ")
 	if r := []rune(s); len(r) > n {
 		return string(r[:n-1]) + "…"
 	}

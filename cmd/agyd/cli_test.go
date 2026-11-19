@@ -15,7 +15,7 @@ import (
 	"sync"
 	"testing"
 
-	"agyd/internal/api"
+	"github.com/kesokaj/agyd/internal/api"
 )
 
 // Canned agyd responses, shaped like internal/web/static/openapi.json.

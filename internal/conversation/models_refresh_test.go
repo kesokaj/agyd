@@ -4,7 +4,7 @@ import (
 	"slices"
 	"testing"
 
-	"agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/acp"
 )
 
 // TestModelsFollowLiveCurrent: a model list agy changes on its own

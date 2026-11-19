@@ -3,7 +3,7 @@ package api
 import (
 	"net/http"
 
-	"agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/acp"
 )
 
 // modelsResponse lists the values agy offers, under the API names (D1).

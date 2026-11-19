@@ -15,6 +15,7 @@ go run ./cmd/agyd
 
 # Test
 go vet ./... && go test -race ./...
+shellcheck install.sh
 ```
 
 ## Architecture
@@ -27,7 +28,7 @@ Every code change under `cmd/` or `internal/` runs `go vet ./... && go test -rac
 
 ## Deploy
 
-Local only — see `DEPLOY-local` (`fyr record get DEPLOY-local`).
+Local binary and GitHub Release archives — see `DEPLOY-local` (`fyr record get DEPLOY-local`).
 
 ## Key Files
 
@@ -37,6 +38,8 @@ Local only — see `DEPLOY-local` (`fyr record get DEPLOY-local`).
 | `internal/acp/` | ACP v1 JSON-RPC 2.0 stdio client, session registry, permission policy |
 | `internal/api/` | HTTP/SSE handlers, route table, Host/CSRF guard, and AIP-193 JSON errors |
 | `internal/web/` | Embedded Swagger UI assets, `docs.html`, and `openapi.json` spec |
+| `install.sh` | Public HTTPS release installer with SHA-256 verification |
+| `LICENSE` | MIT License terms (root repo) |
 | `PRD.md` | What and why: problem, goals, the non-negotiable requirements |
 | `SDD.md` | How the parts fit: components, flows, decisions |
 | `TDD.md` | How each part is built and tested |

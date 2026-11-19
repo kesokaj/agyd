@@ -6,7 +6,7 @@ import (
 	"slices"
 	"time"
 
-	"agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/acp"
 )
 
 // Conversation is the API view of one conversation, live or from agy's

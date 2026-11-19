@@ -1,7 +1,7 @@
 # PRD — agy-api
 
 Expose an installed `agy-cli` as a local HTTP/SSE API with Swagger docs, shipped as one host binary (`agyd`) that reuses the CLI's existing login.
-Status: draft · Owner: spgo · Last updated: 2026-11-16 · Design: [SDD.md](SDD.md) · Technical design: [TDD.md](TDD.md)
+Status: draft · Owner: kesokaj · Last updated: 2026-11-19 · Design: [SDD.md](SDD.md) · Technical design: [TDD.md](TDD.md)
 
 <!-- Read before every significant change. Immutable without the user's explicit approval of the exact text:
      propose the edit → approval → ADR → PRD.md and TODO.md in one commit (global context § Hard rules).

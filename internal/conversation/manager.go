@@ -11,8 +11,8 @@ import (
 	"log/slog"
 	"sync"
 
-	"agyd/internal/acp"
-	"agyd/internal/config"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/config"
 )
 
 // Agent is the subset of the ACP client the Manager drives.

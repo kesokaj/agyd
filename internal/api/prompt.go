@@ -10,8 +10,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"agyd/internal/acp"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 type promptRequest struct {

@@ -11,7 +11,6 @@
 
 ## Next
 
-- CLI output hardening: strip terminal control characters from server and agent text.
 - Permission positive control (operator): with agy `toolPermission: request-review`, rerun the deny_all probe and confirm `permission decision` lines and refusals.
 
 ## Backlog

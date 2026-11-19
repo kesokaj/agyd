@@ -4,10 +4,10 @@ import (
 	"log/slog"
 	"net/http"
 
-	"agyd/internal/acp"
-	"agyd/internal/api"
-	"agyd/internal/conversation"
-	"agyd/internal/web"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/api"
+	"github.com/kesokaj/agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/web"
 )
 
 func newMux(log *slog.Logger, acpClient acp.Service, mgr *conversation.Manager, workspace string, extraHosts ...string) http.Handler {

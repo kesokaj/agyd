@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 func TestModels(t *testing.T) {

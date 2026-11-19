@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 func createConv(t *testing.T, e *testEnv, body string) conversation.Conversation {

@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"agyd/internal/acp"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 func TestClearEndpoints(t *testing.T) {

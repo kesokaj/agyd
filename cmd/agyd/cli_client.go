@@ -9,7 +9,7 @@ import (
 	"net/http"
 	"strings"
 
-	"agyd/internal/api"
+	"github.com/kesokaj/agyd/internal/api"
 )
 
 // cli is one client command's connection to a running agyd.
@@ -34,12 +34,12 @@ type apiErr struct {
 func (e *apiErr) Error() string {
 	reason := ""
 	for _, d := range e.Details {
-		if d.Reason != "" {
-			reason = " (" + d.Reason + ")"
+		if r := sanitizeTerminal(d.Reason); r != "" {
+			reason = " (" + r + ")"
 			break
 		}
 	}
-	return fmt.Sprintf("%d %s: %s%s", e.Code, e.Status, e.Message, reason)
+	return fmt.Sprintf("%d %s: %s%s", e.Code, sanitizeTerminal(e.Status), sanitizeTerminal(e.Message), reason)
 }
 
 // decodeAPIErr turns an error response body into an *apiErr, falling back to
@@ -126,12 +126,13 @@ func (c *cli) call(ctx context.Context, method, path string, body, out any) erro
 // printInfo writes the one-line visibility summary (D8) from the Agyd-*
 // headers to stderr; agyd omits a header whose value is unknown.
 func (c *cli) printInfo(h http.Header) {
-	id := h.Get(api.HeaderConversation)
+	id := sanitizeTerminal(h.Get(api.HeaderConversation))
 	if id == "" {
 		fmt.Fprintln(c.env.stderr, "agyd: conversation=none")
 		return
 	}
 	or := func(v string) string {
+		v = sanitizeTerminal(v)
 		if v == "" {
 			return "-"
 		}
@@ -139,7 +140,7 @@ func (c *cli) printInfo(h http.Header) {
 	}
 	line := fmt.Sprintf("agyd: conversation=%s model=%s thinking=%s", id,
 		or(h.Get(api.HeaderModel)), or(h.Get(api.HeaderThinkingLevel)))
-	if m := h.Get(api.HeaderMode); m != "" {
+	if m := sanitizeTerminal(h.Get(api.HeaderMode)); m != "" {
 		line += " mode=" + m
 	}
 	fmt.Fprintln(c.env.stderr, line)

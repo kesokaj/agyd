@@ -11,8 +11,8 @@ import (
 	"strconv"
 	"strings"
 
-	"agyd/internal/acp"
-	"agyd/internal/config"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/config"
 )
 
 type appConfig struct {

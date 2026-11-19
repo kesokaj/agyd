@@ -16,7 +16,7 @@ import (
 	"syscall"
 	"time"
 
-	"agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/acp"
 )
 
 func newLogger(w io.Writer, level slog.Leveler) *slog.Logger {

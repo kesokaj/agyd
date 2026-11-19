@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"agyd/internal/acp"
-	"agyd/internal/config"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/config"
 )
 
 func TestUpdateRereadsAfterLock(t *testing.T) {

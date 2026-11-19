@@ -11,8 +11,8 @@ import (
 	"runtime/debug"
 	"strings"
 
-	"agyd/internal/acp"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 // Config holds HTTP server configuration.

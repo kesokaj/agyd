@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 
-	"agyd/internal/acp"
-	"agyd/internal/config"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/config"
 )
 
 // applyStrict sets every non-empty value of s that differs from agy's current

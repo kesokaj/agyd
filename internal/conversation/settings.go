@@ -5,8 +5,8 @@ import (
 	"errors"
 	"fmt"
 
-	"agyd/internal/acp"
-	"agyd/internal/config"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/config"
 )
 
 // Errors the API maps to status codes.

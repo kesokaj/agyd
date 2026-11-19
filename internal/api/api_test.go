@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/acp"
 )
 
 func TestStatusAndHealthEndpoints(t *testing.T) {

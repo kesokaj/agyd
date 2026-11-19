@@ -14,7 +14,7 @@ import (
 	"strings"
 	"time"
 
-	"agyd/internal/api"
+	"github.com/kesokaj/agyd/internal/api"
 )
 
 const (

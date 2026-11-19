@@ -1,4 +1,4 @@
-module agyd
+module github.com/kesokaj/agyd
 
 go 1.27
 

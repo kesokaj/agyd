@@ -3,8 +3,8 @@ package api
 import (
 	"net/http"
 
-	"agyd/internal/acp"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 // Visibility headers (D5, D17): every response from this handler names the

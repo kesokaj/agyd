@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"agyd/internal/acp"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 // pickerAttempts is how many invalid answers a question takes before the
@@ -29,7 +29,7 @@ func pickDefaults(in io.Reader, out io.Writer, opts []acp.ConfigOption, statePat
 	if thinking, ok := findOption(opts, acp.ConfigThinking); ok {
 		s.ThinkingLevel = choose(r, out, "Default thinking level", thinking)
 	}
-	fmt.Fprintf(out, "Save as default in %s? [Y/n] ", statePath)
+	fmt.Fprintf(out, "Save as default in %s? [Y/n] ", sanitizeTerminal(statePath))
 	answer, _ := readAnswer(r)
 	switch strings.ToLower(answer) {
 	case "", "y", "yes":
@@ -43,17 +43,18 @@ func pickDefaults(in io.Reader, out io.Writer, opts []acp.ConfigOption, statePat
 func choose(r *bufio.Reader, out io.Writer, title string, o acp.ConfigOption) string {
 	fmt.Fprintf(out, "%s:\n", title)
 	for i, v := range o.Options {
-		line := fmt.Sprintf("  %d) %s", i+1, v.Value)
+		line := fmt.Sprintf("  %d) %s", i+1, sanitizeTerminal(v.Value))
 		if v.Name != "" && v.Name != v.Value {
-			line += "  " + v.Name
+			line += "  " + sanitizeTerminal(v.Name)
 		}
 		if v.Value == o.CurrentValue {
 			line += "  (default)"
 		}
 		fmt.Fprintln(out, line)
 	}
+	cur := sanitizeTerminal(o.CurrentValue)
 	for range pickerAttempts {
-		fmt.Fprintf(out, "Choose [%s]: ", o.CurrentValue)
+		fmt.Fprintf(out, "Choose [%s]: ", cur)
 		answer, eof := readAnswer(r)
 		if answer == "" {
 			return o.CurrentValue
@@ -61,12 +62,12 @@ func choose(r *bufio.Reader, out io.Writer, title string, o acp.ConfigOption) st
 		if v, ok := match(o, answer); ok {
 			return v
 		}
-		fmt.Fprintf(out, "%q is not one of the choices.\n", answer)
+		fmt.Fprintf(out, "%q is not one of the choices.\n", sanitizeTerminal(answer))
 		if eof {
 			break
 		}
 	}
-	fmt.Fprintf(out, "Using %s.\n", o.CurrentValue)
+	fmt.Fprintf(out, "Using %s.\n", cur)
 	return o.CurrentValue
 }
 

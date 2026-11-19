@@ -4,8 +4,8 @@ import (
 	"errors"
 	"net/http"
 
-	"agyd/internal/acp"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 // settingsRequest is the body of PATCH /v1/current, PATCH

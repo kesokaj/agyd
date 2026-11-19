@@ -8,9 +8,9 @@ import (
 	"path/filepath"
 	"time"
 
-	"agyd/internal/acp"
-	"agyd/internal/config"
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/acp"
+	"github.com/kesokaj/agyd/internal/config"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 // startupTimeout bounds resuming or creating the startup conversation (D13).

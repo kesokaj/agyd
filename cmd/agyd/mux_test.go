@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"agyd/internal/conversation"
+	"github.com/kesokaj/agyd/internal/conversation"
 )
 
 func TestMuxUnknownPathJSON(t *testing.T) {
