@@ -7,12 +7,7 @@
 
 ## Now
 
-`PLAN-folder-isolation` (`ADR-006`; Phases 0-3, 4b, and 5 complete, Phase 4a superseded by D7, `BUG-002` graduated). Active: **Phase 6: 405 on web routes** — web routes join the method table with `405` and `Allow: GET, HEAD`.
-
-- [ ] Web routes join the method table. `POST /docs` → 405 with `Allow: GET, HEAD`. Test first.
-- [ ] Checkpoint: change record, commit and push, handoff.
-
-Remaining phases: none (final phase of `PLAN-folder-isolation`).
+(no active plan; `PLAN-folder-isolation` completed 2026-11-19)
 
 ## Next
 

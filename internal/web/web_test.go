@@ -28,17 +28,14 @@ func TestWebRoutes(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			req := httptest.NewRequest("GET", tt.path, nil)
-			w := httptest.NewRecorder()
-			mux.ServeHTTP(w, req)
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			t.Run(method+" "+tt.path, func(t *testing.T) {
+				req := httptest.NewRequest(method, tt.path, nil)
+				w := httptest.NewRecorder()
+				mux.ServeHTTP(w, req)
 
-			if w.Code != tt.want {
-				t.Errorf("GET %s = %d, want %d", tt.path, w.Code, tt.want)
-			}
-			if tt.want == http.StatusOK {
-				if ct := w.Header().Get("Content-Type"); ct != tt.ct {
-					t.Errorf("Content-Type = %q, want %q", ct, tt.ct)
+				if w.Code != tt.want {
+					t.Errorf("%s %s = %d, want %d", method, tt.path, w.Code, tt.want)
 				}
 				if csp := w.Header().Get("Content-Security-Policy"); tt.csp && csp != "default-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; frame-ancestors 'none'" {
 					t.Errorf("CSP = %q", csp)
@@ -46,8 +43,30 @@ func TestWebRoutes(t *testing.T) {
 				if nos := w.Header().Get("X-Content-Type-Options"); nos != "nosniff" {
 					t.Errorf("nosniff = %q", nos)
 				}
-			}
-		})
+				if tt.want == http.StatusOK {
+					if ct := w.Header().Get("Content-Type"); ct != tt.ct {
+						t.Errorf("Content-Type = %q, want %q", ct, tt.ct)
+					}
+				}
+				if method == http.MethodHead && w.Body.Len() != 0 {
+					t.Errorf("HEAD %s wrote %d bytes, want 0", tt.path, w.Body.Len())
+				}
+			})
+		}
+	}
+
+	routes := Routes()
+	wantPatterns := []string{"/{$}", "/docs", "/openapi.json", "/static/"}
+	if len(routes) != len(wantPatterns) {
+		t.Fatalf("len(Routes()) = %d, want %d", len(routes), len(wantPatterns))
+	}
+	for i, wantPattern := range wantPatterns {
+		if routes[i].Pattern != wantPattern {
+			t.Errorf("Routes()[%d].Pattern = %q, want %q", i, routes[i].Pattern, wantPattern)
+		}
+		if !reflect.DeepEqual(routes[i].Methods, []string{http.MethodGet, http.MethodHead}) {
+			t.Errorf("Routes()[%d].Methods = %v, want [GET HEAD]", i, routes[i].Methods)
+		}
 	}
 }
 

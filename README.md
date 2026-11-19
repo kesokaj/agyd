@@ -166,7 +166,7 @@ Every error has the same shape (Google AIP-193):
 | 401 | `ACP_AUTH_REQUIRED` | `agy` is not signed in. Run `agy` once, or `agy acp --login` |
 | 403 | `FORBIDDEN_HOST`, `CROSS_ORIGIN_REQUEST` | The request's `Host` header is not an address agyd accepts (loopback, or with `-host` this machine's IPs and hostname); a browser sent a cross-origin write |
 | 404 | `NOT_FOUND`, `CONVERSATION_NOT_FOUND`, `NO_CURRENT_CONVERSATION` | Unknown path; unknown or ended conversation; or nothing is current yet |
-| 405 | `METHOD_NOT_ALLOWED` | Known `/healthz` or `/v1` path, wrong method. The `Allow` header lists the right ones |
+| 405 | `METHOD_NOT_ALLOWED` | Known path (API or web), wrong method. The `Allow` header lists the right ones |
 | 409 | `PROMPT_IN_FLIGHT` | That conversation is running a turn |
 | 413 | `BODY_TOO_LARGE` | The request body is over 1 MiB |
 | 502 | `ACP_RPC_ERROR`, `ACP_PROCESS_EXITED` | `agy` returned an error or exited. It restarts on the next call |

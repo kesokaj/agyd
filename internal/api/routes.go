@@ -10,6 +10,16 @@ type Route struct {
 	Pattern string
 }
 
+// ExtraRoute mounts a non-API handler (such as web docs or static assets) on
+// the API mux so wrong methods on its pattern answer 405 METHOD_NOT_ALLOWED
+// with an Allow header instead of 404. ExtraRoutes are excluded from Routes(),
+// which lists OpenAPI operations.
+type ExtraRoute struct {
+	Methods []string
+	Pattern string
+	Handler http.Handler
+}
+
 type route struct {
 	Route
 	handler handlerFunc

@@ -18,6 +18,7 @@ import (
 // Config holds HTTP server configuration.
 type Config struct {
 	DefaultWorkspace string
+	ExtraRoutes      []ExtraRoute
 }
 
 type server struct {
@@ -93,26 +94,37 @@ func NewHandler(log *slog.Logger, svc acp.Service, mgr *conversation.Manager, cf
 	// tell a wrong method (405 with Allow) from an unknown path (404).
 	paths := http.NewServeMux()
 	allow := map[string][]string{}
-	for _, r := range s.routes() {
-		mux.Handle(r.Method+" "+r.Pattern, s.adapt(r.handler))
-		if _, seen := allow[r.Pattern]; !seen {
-			paths.Handle(r.Pattern, http.NotFoundHandler())
+	add := func(method, pattern string, h http.Handler) {
+		mux.Handle(method+" "+pattern, h)
+		if _, seen := allow[pattern]; !seen {
+			paths.Handle(pattern, http.NotFoundHandler())
 		}
-		allow[r.Pattern] = append(allow[r.Pattern], r.Method)
+		allow[pattern] = append(allow[pattern], method)
+	}
+	for _, r := range s.routes() {
+		add(r.Method, r.Pattern, s.currentHeaders(s.adapt(r.handler)))
+	}
+	for _, r := range cfg.ExtraRoutes {
+		for _, m := range r.Methods {
+			add(m, r.Pattern, r.Handler)
+		}
 	}
 
 	// The catch-all shadows ServeMux's own 405, so it answers both cases in
 	// the AIP-193 shape.
-	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+	mux.Handle("/", s.currentHeaders(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if _, pattern := paths.Handler(r); pattern != "" {
-			w.Header().Set("Allow", strings.Join(allow[pattern], ", "))
-			writeError(w, &apiError{
-				Status: http.StatusMethodNotAllowed,
-				Code:   "UNIMPLEMENTED",
-				Reason: "METHOD_NOT_ALLOWED",
-				Msg:    "method " + r.Method + " not allowed; allowed: " + strings.Join(allow[pattern], ", "),
-			})
-			return
+			if methods := allow[pattern]; len(methods) > 0 {
+				allowed := strings.Join(methods, ", ")
+				w.Header().Set("Allow", allowed)
+				writeError(w, &apiError{
+					Status: http.StatusMethodNotAllowed,
+					Code:   "UNIMPLEMENTED",
+					Reason: "METHOD_NOT_ALLOWED",
+					Msg:    "method " + r.Method + " not allowed; allowed: " + allowed,
+				})
+				return
+			}
 		}
 		writeError(w, &apiError{
 			Status: http.StatusNotFound,
@@ -120,9 +132,9 @@ func NewHandler(log *slog.Logger, svc acp.Service, mgr *conversation.Manager, cf
 			Reason: "NOT_FOUND",
 			Msg:    "Not found",
 		})
-	})
+	})))
 
-	return s.recoverMiddleware(s.currentHeaders(mux))
+	return s.recoverMiddleware(mux)
 }
 
 func (s *server) recoverMiddleware(next http.Handler) http.Handler {

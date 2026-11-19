@@ -41,8 +41,8 @@ All HTTP routes are exposed through the outer mux wrapped in `api.Guard` (ADR-00
 
 | Method & Path | Package | Purpose |
 |---|---|---|
-| `GET /{$}` | `internal/web` | 302 redirect to `/docs` |
-| `GET /docs`, `GET /openapi.json`, `GET /static/*` | `internal/web` | Swagger UI, spec and assets |
+| `GET`, `HEAD /{$}` | `internal/web` | 302 redirect to `/docs` |
+| `GET`, `HEAD /docs`, `/openapi.json`, `/static/*` | `internal/web` | Swagger UI, spec and assets (joined to the method table: wrong methods answer `405 METHOD_NOT_ALLOWED` with `Allow: GET, HEAD`) |
 | `GET /healthz` | `internal/api` | Liveness and service identity: `200 {"service":"agyd"}` |
 | `GET /v1/status` | `internal/api` | ACP child readiness, backend info, permission policy, default `workspace` |
 | `GET`, `PATCH /v1/current` | `internal/api` | Current conversation; change its settings |

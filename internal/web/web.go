@@ -9,8 +9,17 @@ import (
 //go:embed static
 var staticFS embed.FS
 
-// Register adds the web routes to the mux.
-func Register(mux *http.ServeMux) {
+// Route is one web route: a ServeMux path pattern, the HTTP methods it
+// accepts, and its handler.
+type Route struct {
+	Methods []string
+	Pattern string
+	Handler http.Handler
+}
+
+// Routes returns the web routes so callers can mount them on a shared mux and
+// method table.
+func Routes() []Route {
 	subFS, err := fs.Sub(staticFS, "static")
 	if err != nil {
 		panic(err)
@@ -25,19 +34,35 @@ func Register(mux *http.ServeMux) {
 		})
 	}
 
-	mux.Handle("GET /{$}", cspMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/docs", http.StatusFound)
-	})))
+	getHead := func(pattern string, h http.Handler) Route {
+		return Route{
+			Methods: []string{http.MethodGet, http.MethodHead},
+			Pattern: pattern,
+			Handler: cspMiddleware(h),
+		}
+	}
 
-	mux.Handle("GET /docs", cspMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.URL.Path = "/docs.html"
-		fileServer.ServeHTTP(w, r)
-	})))
+	return []Route{
+		getHead("/{$}", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "/docs", http.StatusFound)
+		})),
+		getHead("/docs", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.URL.Path = "/docs.html"
+			fileServer.ServeHTTP(w, r)
+		})),
+		getHead("/openapi.json", http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r.URL.Path = "/openapi.json"
+			fileServer.ServeHTTP(w, r)
+		})),
+		getHead("/static/", http.StripPrefix("/static/", fileServer)),
+	}
+}
 
-	mux.Handle("GET /openapi.json", cspMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		r.URL.Path = "/openapi.json"
-		fileServer.ServeHTTP(w, r)
-	})))
-
-	mux.Handle("GET /static/", cspMiddleware(http.StripPrefix("/static/", fileServer)))
+// Register adds the web routes to the mux.
+func Register(mux *http.ServeMux) {
+	for _, r := range Routes() {
+		for _, m := range r.Methods {
+			mux.Handle(m+" "+r.Pattern, r.Handler)
+		}
+	}
 }

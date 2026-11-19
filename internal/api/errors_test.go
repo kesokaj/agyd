@@ -219,3 +219,70 @@ func TestClientClosedRequestIsNotAServerError(t *testing.T) {
 		ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/v1/prompt", nil))
 	want(t, rec, http.StatusInternalServerError, "INTERNAL")
 }
+
+func TestExtraRoutesMethodTable(t *testing.T) {
+	e := newTestEnv(t)
+	created := decode[map[string]any](t, e.do(http.MethodPost, "/v1/conversations", `{}`))
+	id := created["conversationId"].(string)
+
+	h := NewHandler(discardLog(), e.svc, e.mgr, Config{
+		DefaultWorkspace: e.workspace,
+		ExtraRoutes: []ExtraRoute{
+			{
+				Methods: []string{http.MethodGet, http.MethodHead},
+				Pattern: "/docs",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					w.Header().Set("Content-Type", "text/html; charset=utf-8")
+					if r.Method == http.MethodGet {
+						_, _ = io.WriteString(w, "ok")
+					}
+				}),
+			},
+			{
+				Methods: []string{http.MethodGet, http.MethodHead},
+				Pattern: "/{$}",
+				Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					http.Redirect(w, r, "/docs", http.StatusFound)
+				}),
+			},
+		},
+	})
+
+	do := func(method, path string) *httptest.ResponseRecorder {
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(method, path, nil))
+		return rec
+	}
+
+	// Allowed methods reach the extra handler without attaching Agyd-* headers.
+	rec := do(http.MethodGet, "/docs")
+	if rec.Code != http.StatusOK || rec.Body.String() != "ok" {
+		t.Fatalf("GET /docs = %d %q, want 200 ok", rec.Code, rec.Body.String())
+	}
+	if got := rec.Header().Get(HeaderConversation); got != "" {
+		t.Errorf("GET /docs %s = %q, want empty", HeaderConversation, got)
+	}
+	rec = do(http.MethodHead, "/docs")
+	if rec.Code != http.StatusOK || rec.Body.Len() != 0 {
+		t.Fatalf("HEAD /docs = %d len=%d, want 200 empty", rec.Code, rec.Body.Len())
+	}
+
+	// Wrong methods on extra routes answer 405 JSON with Allow and Agyd-* headers.
+	for _, path := range []string{"/", "/docs"} {
+		rec = do(http.MethodPost, path)
+		want(t, rec, http.StatusMethodNotAllowed, "METHOD_NOT_ALLOWED")
+		if got := rec.Header().Get("Allow"); got != "GET, HEAD" {
+			t.Errorf("POST %s Allow = %q, want %q", path, got, "GET, HEAD")
+		}
+		if got := rec.Header().Get(HeaderConversation); got != id {
+			t.Errorf("POST %s %s = %q, want %q", path, HeaderConversation, got, id)
+		}
+	}
+
+	// Unknown paths stay 404 without Allow.
+	rec = do(http.MethodPost, "/unknown")
+	want(t, rec, http.StatusNotFound, "NOT_FOUND")
+	if got := rec.Header().Get("Allow"); got != "" {
+		t.Errorf("POST /unknown Allow = %q, want empty", got)
+	}
+}
