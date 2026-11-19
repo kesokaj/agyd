@@ -1,6 +1,7 @@
 package conversation
 
 import (
+	"context"
 	"errors"
 	"fmt"
 
@@ -120,6 +121,7 @@ func (m *Manager) SetDefaults(s Settings, persist bool) (Settings, error) {
 	m.savedDefaults = nextSaved
 	m.defaults = nextRunning
 	m.mu.Unlock()
+	m.logSettingsEvent(context.Background(), "defaults updated", nextRunning)
 	return nextRunning, nil
 }
 

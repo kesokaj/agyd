@@ -198,6 +198,7 @@ func (p *folderProc) spawnAndInit() error {
 	}
 	p.protocolVer = initRes.ProtocolVersion
 	p.agentInfo = initRes.AgentInfo
+	p.client.log.Info("acp process started", "dir", p.dir, "pid", procPID(cmd), "agent", initRes.AgentInfo.Name, "version", initRes.AgentInfo.Version)
 	return nil
 }
 
@@ -260,12 +261,21 @@ func (p *folderProc) drainStderr(r io.Reader, done chan<- struct{}) {
 	}
 }
 
+func procPID(cmd *exec.Cmd) int {
+	if cmd != nil && cmd.Process != nil {
+		return cmd.Process.Pid
+	}
+	return 0
+}
+
 func (p *folderProc) onExit(cmd *exec.Cmd, stderrDone <-chan struct{}) {
 	// Drop client sessions before waking pending calls so a caller receiving
 	// ErrProcessClosed immediately observes GetSession -> ErrSessionNotFound.
 	p.client.dropProcSessions(p)
 
 	p.mu.Lock()
+	expected := p.stopped
+	pid := procPID(cmd)
 	p.stopped = true
 	if p.stdin != nil {
 		_ = p.stdin.Close()
@@ -278,6 +288,16 @@ func (p *folderProc) onExit(cmd *exec.Cmd, stderrDone <-chan struct{}) {
 	}
 	p.mu.Unlock()
 
-	_ = cmd.Wait()
+	waitErr := cmd.Wait()
 	<-stderrDone
+
+	if expected {
+		p.client.log.Info("acp process stopped", "dir", p.dir, "pid", pid)
+		return
+	}
+	attrs := []any{"dir", p.dir, "pid", pid}
+	if waitErr != nil {
+		attrs = append(attrs, "err", waitErr)
+	}
+	p.client.log.Warn("acp process exited unexpectedly", attrs...)
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -500,4 +501,85 @@ func TestClientCancelAndCrashRecovery(t *testing.T) {
 	if err != nil || sess2.SessionID == "" {
 		t.Fatalf("NewSession after lazy respawn = %+v, err = %v", sess2, err)
 	}
+}
+
+func TestProcessLifecycleLogs(t *testing.T) {
+	t.Run("started and clean stop", func(t *testing.T) {
+		c := newTestClient(t, "standard", PermissionAllowAll)
+		logs := &syncBuffer{}
+		c.log = slog.New(slog.NewJSONHandler(logs, nil))
+		ws := realTempDir(t)
+		sess, err := c.NewSession(t.Context(), ws)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		if err := c.CloseSession(t.Context(), sess.SessionID); err != nil {
+			t.Fatalf("CloseSession: %v", err)
+		}
+		started := logs.records(t, "acp process started")
+		if len(started) != 1 {
+			t.Fatalf("got %d started logs, want 1", len(started))
+		}
+		pid, _ := started[0]["pid"].(float64)
+		if started[0]["level"] != "INFO" || started[0]["dir"] != ws || pid <= 0 || started[0]["agent"] != "fake-agy" || started[0]["version"] != "1.5.9-test" {
+			t.Errorf("started = %v, want INFO dir=%q pid>0 agent=fake-agy version=1.5.9-test", started[0], ws)
+		}
+		stopped := logs.records(t, "acp process stopped")
+		if len(stopped) != 1 || stopped[0]["level"] != "INFO" || stopped[0]["dir"] != ws || stopped[0]["pid"] != started[0]["pid"] {
+			t.Errorf("stopped = %v, want single INFO dir=%q pid=%v", stopped, ws, started[0]["pid"])
+		}
+		if unexpected := logs.records(t, "acp process exited unexpectedly"); len(unexpected) != 0 {
+			t.Errorf("unexpected exit logs on clean stop: %v", unexpected)
+		}
+	})
+
+	t.Run("unexpected crash", func(t *testing.T) {
+		c := newTestClient(t, "slow_and_crash", PermissionAllowAll)
+		logs := &syncBuffer{}
+		c.log = slog.New(slog.NewJSONHandler(logs, nil))
+		ws := realTempDir(t)
+		sess, err := c.NewSession(t.Context(), ws)
+		if err != nil {
+			t.Fatalf("NewSession: %v", err)
+		}
+		if _, err := c.Prompt(t.Context(), sess.SessionID, []ContentBlock{{Type: "text", Text: "crash_now"}}, nil); !errors.Is(err, ErrProcessClosed) {
+			t.Fatalf("Prompt(crash_now) err = %v, want ErrProcessClosed", err)
+		}
+		_ = c.Close() // waits for procWG so onExit finishes logging
+		started := logs.records(t, "acp process started")
+		exited := logs.records(t, "acp process exited unexpectedly")
+		if len(started) != 1 || len(exited) != 1 {
+			t.Fatalf("started=%d exited=%d, want 1 and 1", len(started), len(exited))
+		}
+		errStr, _ := exited[0]["err"].(string)
+		if exited[0]["level"] != "WARN" || exited[0]["dir"] != ws || exited[0]["pid"] != started[0]["pid"] || !strings.Contains(errStr, "exit status 2") {
+			t.Errorf("exited = %v, want WARN dir=%q pid=%v err=exit status 2", exited[0], ws, started[0]["pid"])
+		}
+		if stopped := logs.records(t, "acp process stopped"); len(stopped) != 0 {
+			t.Errorf("clean stop logged on crash: %v", stopped)
+		}
+	})
+
+	t.Run("stderr debug level and procPID nil-safe", func(t *testing.T) {
+		if procPID(nil) != 0 || procPID(&exec.Cmd{}) != 0 {
+			t.Fatalf("procPID(nil/unstarted) must be 0")
+		}
+		logs := &syncBuffer{}
+		var lv slog.LevelVar
+		p := &folderProc{client: &Client{log: slog.New(slog.NewJSONHandler(logs, &slog.HandlerOptions{Level: &lv}))}, dir: "/ws/stderr"}
+		done := make(chan struct{})
+		p.drainStderr(strings.NewReader("hidden\n"), done)
+		<-done
+		if recs := logs.records(t, "acp stderr"); len(recs) != 0 {
+			t.Fatalf("INFO logged stderr: %v", recs)
+		}
+		lv.Set(slog.LevelDebug)
+		done = make(chan struct{})
+		p.drainStderr(strings.NewReader("diag line\n"), done)
+		<-done
+		recs := logs.records(t, "acp stderr")
+		if len(recs) != 1 || recs[0]["level"] != "DEBUG" || recs[0]["dir"] != "/ws/stderr" || recs[0]["line"] != "diag line" {
+			t.Errorf("stderr records = %v, want single DEBUG dir=/ws/stderr line='diag line'", recs)
+		}
+	})
 }

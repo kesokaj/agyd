@@ -1,7 +1,10 @@
 package main
 
 import (
+	"bytes"
+	"encoding/json"
 	"errors"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +47,9 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 		}
 		if cfg.StateDir != "/mock/home/.config/agyd" {
 			t.Errorf("StateDir = %q, want /mock/home/.config/agyd", cfg.StateDir)
+		}
+		if cfg.LogLevel != slog.LevelInfo {
+			t.Errorf("LogLevel = %v, want INFO", cfg.LogLevel)
 		}
 	})
 
@@ -169,8 +175,8 @@ func TestConfigFromEnvAndFlags(t *testing.T) {
 			if !ok {
 				t.Fatalf("%s: err = %v, want *usageError", arg, err)
 			}
-			for _, f := range []string{"-host", "-port", "-workspace", "-state-dir", "-permission-policy", "-agy", "-acp-args", "AGYD_HOST",
-				"AGYD_STATE_DIR", "-model", "-thinking", "-mode", "-no-prompt", "AGYD_MODEL", "AGYD_THINKING", "AGYD_MODE", "AGYD_NO_PROMPT", "state.json"} {
+			for _, f := range []string{"-host", "-port", "-workspace", "-state-dir", "-permission-policy", "-agy", "-acp-args", "-log-level", "AGYD_HOST",
+				"AGYD_STATE_DIR", "AGYD_LOG_LEVEL", "-model", "-thinking", "-mode", "-no-prompt", "AGYD_MODEL", "AGYD_THINKING", "AGYD_MODE", "AGYD_NO_PROMPT", "state.json"} {
 				if !strings.Contains(ue.text, f) {
 					t.Errorf("%s: usage lacks %q:\n%s", arg, f, ue.text)
 				}
@@ -332,4 +338,117 @@ func TestWorkspaceRejectsSymlinks(t *testing.T) {
 			}
 		}
 	})
+}
+
+func TestParseLogLevel(t *testing.T) {
+	valid := []struct {
+		raw  string
+		want slog.Level
+	}{
+		{"debug", slog.LevelDebug},
+		{"DEBUG", slog.LevelDebug},
+		{"  DeBuG ", slog.LevelDebug},
+		{"info", slog.LevelInfo},
+		{"INFO", slog.LevelInfo},
+		{" warn ", slog.LevelWarn},
+		{"warning", slog.LevelWarn},
+		{"Warning", slog.LevelWarn},
+		{"error", slog.LevelError},
+		{"ERROR", slog.LevelError},
+	}
+	for _, tc := range valid {
+		got, err := parseLogLevel(tc.raw)
+		if err != nil || got != tc.want {
+			t.Errorf("parseLogLevel(%q) = %v, %v; want %v, nil", tc.raw, got, err, tc.want)
+		}
+	}
+	for _, bad := range []string{"", "   ", "trace", "verbose", "fatal", "info2"} {
+		if _, err := parseLogLevel(bad); err == nil || !strings.Contains(err.Error(), "must be debug, info, warn, or error") {
+			t.Errorf("parseLogLevel(%q) err = %v, want invalid log level error", bad, err)
+		}
+	}
+}
+
+func TestLogLevelEnvAndFlagPrecedence(t *testing.T) {
+	realWD := realTempDir(t)
+	mockGetwd := func() (string, error) { return realWD, nil }
+	mockLookPath := func(s string) (string, error) { return s, nil }
+	envOf := func(m map[string]string) func(string) string {
+		return func(k string) string {
+			if k == "HOME" {
+				return "/mock/home"
+			}
+			return m[k]
+		}
+	}
+
+	cfg, err := loadConfig(nil, envOf(map[string]string{"AGYD_LOG_LEVEL": "debug"}), mockGetwd, mockLookPath)
+	if err != nil || cfg.LogLevel != slog.LevelDebug {
+		t.Fatalf("AGYD_LOG_LEVEL=debug: cfg.LogLevel=%v err=%v", cfg.LogLevel, err)
+	}
+	cfg, err = loadConfig([]string{"-log-level", "warn"}, envOf(map[string]string{"AGYD_LOG_LEVEL": "debug"}), mockGetwd, mockLookPath)
+	if err != nil || cfg.LogLevel != slog.LevelWarn {
+		t.Fatalf("-log-level over env: cfg.LogLevel=%v err=%v", cfg.LogLevel, err)
+	}
+	if _, err := loadConfig(nil, envOf(map[string]string{"AGYD_LOG_LEVEL": "trace"}), mockGetwd, mockLookPath); err == nil {
+		t.Error("invalid AGYD_LOG_LEVEL: err = nil, want error")
+	}
+	if _, err := loadConfig([]string{"-log-level=bogus"}, envOf(nil), mockGetwd, mockLookPath); err == nil {
+		t.Error("invalid -log-level: err = nil, want error")
+	}
+}
+
+func TestNewLoggerLevelFiltering(t *testing.T) {
+	parseLines := func(t *testing.T, raw string) []map[string]any {
+		t.Helper()
+		var out []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+			if line == "" {
+				continue
+			}
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				t.Fatalf("log line is not JSON: %q: %v", line, err)
+			}
+			out = append(out, rec)
+		}
+		return out
+	}
+
+	var nilBuf bytes.Buffer
+	nilLog := newLogger(&nilBuf, nil)
+	nilLog.Debug("hidden")
+	nilLog.Info("shown")
+	nilRecs := parseLines(t, nilBuf.String())
+	if len(nilRecs) != 1 || nilRecs[0]["severity"] != "INFO" || nilRecs[0]["message"] != "shown" {
+		t.Fatalf("newLogger(nil) records = %v, want single INFO shown", nilRecs)
+	}
+
+	var buf bytes.Buffer
+	var lv slog.LevelVar
+	log := newLogger(&buf, &lv)
+	log.Debug("suppressed-at-info")
+	log.Info("info-visible")
+	lv.Set(slog.LevelDebug)
+	log.Debug("debug-visible")
+	lv.Set(slog.LevelWarn)
+	log.Info("suppressed-at-warn")
+	log.Warn("warn-visible")
+	log.Error("error-visible")
+
+	recs := parseLines(t, buf.String())
+	want := []struct{ sev, msg string }{
+		{"INFO", "info-visible"},
+		{"DEBUG", "debug-visible"},
+		{"WARNING", "warn-visible"},
+		{"ERROR", "error-visible"},
+	}
+	if len(recs) != len(want) {
+		t.Fatalf("got %d log records (%v), want %d", len(recs), recs, len(want))
+	}
+	for i, w := range want {
+		if recs[i]["severity"] != w.sev || recs[i]["message"] != w.msg {
+			t.Errorf("record[%d] = %v, want severity=%s message=%s", i, recs[i], w.sev, w.msg)
+		}
+	}
 }

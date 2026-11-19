@@ -2,6 +2,7 @@ package conversation
 
 import (
 	"bytes"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"strings"
@@ -396,4 +397,123 @@ func TestStartupNilStateAndSettingsOfSanitizes(t *testing.T) {
 	if got != (Settings{ThinkingLevel: "high"}) {
 		t.Errorf("SettingsOf sanitized = %+v, want {ThinkingLevel:high}", got)
 	}
+}
+
+func newJSONHarness(t *testing.T, defaults Settings) *harness {
+	t.Helper()
+	h := &harness{agent: newFakeAgent(), state: &memState{}, logs: &syncBuffer{}}
+	h.m = New(Options{
+		Agent:     h.agent,
+		State:     h.state,
+		Log:       slog.New(slog.NewJSONHandler(h.logs, nil)),
+		Workspace: "/ws",
+		Defaults:  defaults,
+	})
+	return h
+}
+
+func parseJSONLogs(t *testing.T, raw string) []map[string]any {
+	t.Helper()
+	var out []map[string]any
+	for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+		if line == "" {
+			continue
+		}
+		var rec map[string]any
+		if err := json.Unmarshal([]byte(line), &rec); err != nil {
+			t.Fatalf("log line is not JSON: %q: %v", line, err)
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+func assertLogRecord(t *testing.T, rec, want map[string]any) {
+	t.Helper()
+	for k, v := range want {
+		if rec[k] != v {
+			t.Errorf("log[%q] %s = %#v, want %#v", want["msg"], k, rec[k], v)
+		}
+	}
+	if len(rec) != len(want)+1 { // +1 for slog's "time"
+		t.Errorf("log[%q] has unexpected extra fields: %v", want["msg"], rec)
+	}
+}
+
+func TestConversationLifecycleLogs(t *testing.T) {
+	h := newJSONHarness(t, Settings{})
+	ctx := t.Context()
+
+	c1, err := h.m.Create(ctx, CreateRequest{Cwd: "/proj/a", Settings: Settings{Model: "claude-sonnet-5-5", ThinkingLevel: "high"}})
+	if err != nil {
+		t.Fatalf("Create c1: %v", err)
+	}
+	c2, err := h.m.Create(ctx, CreateRequest{Cwd: "/proj/b", Settings: Settings{Mode: "plan"}, NoUse: true})
+	if err != nil {
+		t.Fatalf("Create c2: %v", err)
+	}
+	c3, err := h.m.Clear(ctx, "")
+	if err != nil {
+		t.Fatalf("Clear: %v", err)
+	}
+	if _, err := h.m.Use(ctx, c2.SessionID); err != nil {
+		t.Fatalf("Use live: %v", err)
+	}
+	if _, err := h.m.Use(ctx, "h2"); err != nil {
+		t.Fatalf("Use resume: %v", err)
+	}
+	if _, err := h.m.Update(ctx, "", Settings{ThinkingLevel: "low", Mode: "plan"}); err != nil {
+		t.Fatalf("Update: %v", err)
+	}
+	if err := h.m.Delete(ctx, c2.SessionID); err != nil {
+		t.Fatalf("Delete non-current: %v", err)
+	}
+	if err := h.m.Delete(ctx, "h2"); err != nil {
+		t.Fatalf("Delete current: %v", err)
+	}
+
+	recs := parseJSONLogs(t, h.logs.String())
+	want := []map[string]any{
+		{"level": "INFO", "msg": "conversation created", "conversationId": c1.SessionID, "cwd": "/proj/a", "model": "claude-sonnet-5-5", "thinkingLevel": "high", "mode": "default", "current": true},
+		{"level": "INFO", "msg": "conversation created", "conversationId": c2.SessionID, "cwd": "/proj/b", "model": "gemini-4-carbon", "thinkingLevel": "medium", "mode": "plan", "current": false},
+		{"level": "INFO", "msg": "conversation cleared", "fromConversationId": c1.SessionID, "conversationId": c3.SessionID, "cwd": "/proj/a", "model": "claude-sonnet-5-5", "thinkingLevel": "high", "mode": "default"},
+		{"level": "INFO", "msg": "conversation switched", "conversationId": c2.SessionID, "cwd": "/proj/b", "resumed": false, "model": "gemini-4-carbon", "thinkingLevel": "medium", "mode": "plan"},
+		{"level": "INFO", "msg": "conversation switched", "conversationId": "h2", "cwd": "/hist/two", "resumed": true, "model": "gemini-4-carbon", "thinkingLevel": "medium", "mode": "default"},
+		{"level": "INFO", "msg": "conversation updated", "conversationId": "h2", "model": "gemini-4-carbon", "thinkingLevel": "low", "mode": "plan"},
+		{"level": "INFO", "msg": "conversation deleted", "conversationId": c2.SessionID, "wasCurrent": false},
+		{"level": "INFO", "msg": "conversation deleted", "conversationId": "h2", "wasCurrent": true},
+	}
+	if len(recs) != len(want) {
+		t.Fatalf("got %d log records, want %d:\n%s", len(recs), len(want), h.logs.String())
+	}
+	for i := range want {
+		assertLogRecord(t, recs[i], want[i])
+	}
+}
+
+func TestDefaultsUpdatedLog(t *testing.T) {
+	h := newJSONHarness(t, Settings{Model: "gemini-4-carbon"})
+	if _, err := h.m.SetDefaults(Settings{Mode: "plan"}, false); err != nil {
+		t.Fatalf("SetDefaults(persist=false): %v", err)
+	}
+	if recs := parseJSONLogs(t, h.logs.String()); len(recs) != 0 {
+		t.Fatalf("persist=false emitted logs: %v", recs)
+	}
+
+	if _, err := h.m.SetDefaults(Settings{ThinkingLevel: "high"}, true); err != nil {
+		t.Fatalf("SetDefaults(persist=true): %v", err)
+	}
+	h.state.saveErr = errors.New("disk full")
+	if _, err := h.m.SetDefaults(Settings{Model: "claude-sonnet-5-5"}, true); err == nil {
+		t.Fatal("SetDefaults with saveErr returned nil")
+	}
+
+	recs := parseJSONLogs(t, h.logs.String())
+	if len(recs) != 1 {
+		t.Fatalf("got %d logs, want 1:\n%s", len(recs), h.logs.String())
+	}
+	assertLogRecord(t, recs[0], map[string]any{
+		"level": "INFO", "msg": "defaults updated",
+		"model": "gemini-4-carbon", "thinkingLevel": "high", "mode": "plan",
+	})
 }

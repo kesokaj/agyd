@@ -173,7 +173,15 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (acp.SessionInf
 }
 
 func (m *Manager) create(ctx context.Context, req CreateRequest) (acp.SessionInfo, error) {
-	return m.startSession(ctx, req.Cwd, m.Defaults(), req.Settings, req.NoUse)
+	info, err := m.startSession(ctx, req.Cwd, m.Defaults(), req.Settings, req.NoUse)
+	if err != nil {
+		return acp.SessionInfo{}, err
+	}
+	m.logSettingsEvent(ctx, "conversation created", SettingsOf(info),
+		slog.String("conversationId", info.SessionID),
+		slog.String("cwd", info.Cwd),
+		slog.Bool("current", !req.NoUse))
+	return info, nil
 }
 
 func (m *Manager) startSession(ctx context.Context, cwd string, lenient, strict Settings, noUse bool) (acp.SessionInfo, error) {
@@ -217,7 +225,15 @@ func (m *Manager) Clear(ctx context.Context, id string) (acp.SessionInfo, error)
 	if err != nil {
 		return acp.SessionInfo{}, err
 	}
-	return m.startSession(ctx, cwd, m.Defaults().overlay(srcSettings), Settings{}, false)
+	info, err := m.startSession(ctx, cwd, m.Defaults().overlay(srcSettings), Settings{}, false)
+	if err != nil {
+		return acp.SessionInfo{}, err
+	}
+	m.logSettingsEvent(ctx, "conversation cleared", SettingsOf(info),
+		slog.String("fromConversationId", target),
+		slog.String("conversationId", info.SessionID),
+		slog.String("cwd", info.Cwd))
+	return info, nil
 }
 
 func (m *Manager) clearSource(ctx context.Context, id string) (string, Settings, error) {
@@ -244,8 +260,7 @@ func (m *Manager) Use(ctx context.Context, id string) (acp.SessionInfo, error) {
 func (m *Manager) use(ctx context.Context, id string) (acp.SessionInfo, error) {
 	if info, err := m.agent.GetSession(id); err == nil {
 		m.noteOptions(info.ConfigOptions)
-		m.remember(id, memo{cwd: info.Cwd, settings: SettingsOf(info)})
-		m.setCurrent(id)
+		m.commitUse(ctx, id, info, false)
 		return info, nil
 	}
 	mem, known, err := m.recallOrHistory(ctx, id)
@@ -264,9 +279,18 @@ func (m *Manager) use(ctx context.Context, id string) (acp.SessionInfo, error) {
 		want = want.overlay(mem.settings)
 	}
 	info = m.applyLenient(ctx, info, want)
-	m.remember(id, memo{cwd: info.Cwd, settings: SettingsOf(info)})
-	m.setCurrent(id)
+	m.commitUse(ctx, id, info, true)
 	return info, nil
+}
+
+func (m *Manager) commitUse(ctx context.Context, id string, info acp.SessionInfo, resumed bool) {
+	set := SettingsOf(info)
+	m.remember(id, memo{cwd: info.Cwd, settings: set})
+	m.setCurrent(id)
+	m.logSettingsEvent(ctx, "conversation switched", set,
+		slog.String("conversationId", id),
+		slog.String("cwd", info.Cwd),
+		slog.Bool("resumed", resumed))
 }
 
 func (m *Manager) recallOrHistory(ctx context.Context, id string) (memo, bool, error) {
@@ -329,8 +353,11 @@ func (m *Manager) Update(ctx context.Context, id string, s Settings) (acp.Sessio
 	if err != nil {
 		return acp.SessionInfo{}, err
 	}
-	m.remember(info.SessionID, memo{cwd: info.Cwd, settings: SettingsOf(info)})
+	set := SettingsOf(info)
+	m.remember(info.SessionID, memo{cwd: info.Cwd, settings: set})
 	m.persistState()
+	m.logSettingsEvent(ctx, "conversation updated", set,
+		slog.String("conversationId", info.SessionID))
 	return info, nil
 }
 
@@ -357,5 +384,17 @@ func (m *Manager) Delete(ctx context.Context, id string) error {
 	if cleared || hadMemo {
 		m.persistState()
 	}
+	m.log.Info("conversation deleted", "conversationId", id, "wasCurrent", cleared)
 	return nil
+}
+
+func (m *Manager) logSettingsEvent(ctx context.Context, msg string, s Settings, extra ...slog.Attr) {
+	attrs := make([]slog.Attr, 0, len(extra)+3)
+	attrs = append(attrs, extra...)
+	attrs = append(attrs,
+		slog.String("model", s.Model),
+		slog.String("thinkingLevel", s.ThinkingLevel),
+		slog.String("mode", s.Mode),
+	)
+	m.log.LogAttrs(ctx, slog.LevelInfo, msg, attrs...)
 }

@@ -310,7 +310,7 @@ func TestRunLogsFallbackAndNonLoopbackWarningsAtBind(t *testing.T) {
 		cancel()
 		var buf bytes.Buffer
 		cfg := baseCfg
-		err := runWithListen(ctx, newLogger(&buf), cfg, func(_, addr string) (net.Listener, error) {
+		err := runWithListen(ctx, newLogger(&buf, nil), cfg, func(_, addr string) (net.Listener, error) {
 			if addr == "127.0.0.1:8080" {
 				return nil, &net.OpError{Op: "listen", Net: "tcp4", Err: &os.SyscallError{Syscall: "bind", Err: syscall.EADDRINUSE}}
 			}
@@ -332,7 +332,7 @@ func TestRunLogsFallbackAndNonLoopbackWarningsAtBind(t *testing.T) {
 		cfg := baseCfg
 		cfg.Host = "0.0.0.0"
 		cfg.PortExplicit = true
-		err := runWithListen(ctx, newLogger(&buf), cfg, func(_, _ string) (net.Listener, error) {
+		err := runWithListen(ctx, newLogger(&buf, nil), cfg, func(_, _ string) (net.Listener, error) {
 			return stubListener{}, nil
 		})
 		if err != nil {

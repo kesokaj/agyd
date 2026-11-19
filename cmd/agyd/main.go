@@ -19,9 +19,12 @@ import (
 	"agyd/internal/acp"
 )
 
-func newLogger(w io.Writer) *slog.Logger {
+func newLogger(w io.Writer, level slog.Leveler) *slog.Logger {
+	if level == nil {
+		level = slog.LevelInfo
+	}
 	return slog.New(slog.NewJSONHandler(w, &slog.HandlerOptions{
-		Level: slog.LevelInfo,
+		Level: level,
 		ReplaceAttr: func(groups []string, a slog.Attr) slog.Attr {
 			if len(groups) > 0 {
 				return a
@@ -131,8 +134,9 @@ func main() {
 
 // serve runs the server: bare `agyd`, `agyd serve` or `agyd -flag ...`.
 func serve(args []string) {
-	log := newLogger(os.Stdout)
-	cfg, err := loadServeConfig(log, args)
+	var levelVar slog.LevelVar
+	log := newLogger(os.Stdout, &levelVar)
+	cfg, err := loadServeConfig(args)
 	if ue, ok := errors.AsType[*usageError](err); ok {
 		fmt.Print(ue.text)
 		return
@@ -141,6 +145,9 @@ func serve(args []string) {
 		log.Error("configuration error", "err", err)
 		os.Exit(1)
 	}
+	levelVar.Set(cfg.LogLevel)
+	log.Info("settings", "model", cfg.Model, "thinking", cfg.Thinking, "mode", cfg.Mode,
+		"stateFile", filepath.Join(cfg.StateDir, "state.json"), "logLevel", cfg.LogLevel.String())
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	if err := run(ctx, log, cfg); err != nil {
@@ -151,11 +158,6 @@ func serve(args []string) {
 
 // loadServeConfig resolves configuration from flags and AGYD_* environment
 // variables only (ADR-006).
-func loadServeConfig(log *slog.Logger, args []string) (appConfig, error) {
-	cfg, err := loadConfig(args, os.Getenv, os.Getwd, exec.LookPath)
-	if err == nil {
-		log.Info("settings", "model", cfg.Model, "thinking", cfg.Thinking, "mode", cfg.Mode,
-			"stateFile", filepath.Join(cfg.StateDir, "state.json"))
-	}
-	return cfg, err
+func loadServeConfig(args []string) (appConfig, error) {
+	return loadConfig(args, os.Getenv, os.Getwd, exec.LookPath)
 }

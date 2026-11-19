@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"path/filepath"
 	"strconv"
@@ -22,6 +23,7 @@ type appConfig struct {
 	ACPArgs          []string
 	Workspace        string
 	PermissionPolicy acp.PermissionPolicy
+	LogLevel         slog.Level
 
 	// Model, Thinking and Mode are the requested defaults for new
 	// conversations ("" means not set at this layer). NoPrompt skips the
@@ -43,10 +45,10 @@ func (e *usageError) Error() string { return "help requested" }
 
 // rawFlags holds the unvalidated flag values.
 type rawFlags struct {
-	host, port, bin, args, workspace, stateDir, policy string
-	model, thinking, mode                              string
-	noPrompt                                           bool
-	portSet, stateDirSet                               bool
+	host, port, bin, args, workspace, stateDir, policy, logLevel string
+	model, thinking, mode                                        string
+	noPrompt                                                     bool
+	portSet, stateDirSet                                         bool
 }
 
 func envOr(getenv func(string) string, key, fallback string) string {
@@ -69,6 +71,7 @@ func newServeFlags(getenv func(string) string, wd string, noPrompt bool) (*flag.
 	fs.StringVar(&r.workspace, "workspace", envOr(getenv, "AGYD_WORKSPACE", wd), "default conversation working directory (env AGYD_WORKSPACE)")
 	fs.StringVar(&r.stateDir, "state-dir", getenv("AGYD_STATE_DIR"), "directory holding state.json (env AGYD_STATE_DIR; default ~/.config/agyd)")
 	fs.StringVar(&r.policy, "permission-policy", envOr(getenv, "AGYD_PERMISSION_POLICY", "allow_all"), "allow_all approves every agent tool call; deny_all refuses them (env AGYD_PERMISSION_POLICY)")
+	fs.StringVar(&r.logLevel, "log-level", envOr(getenv, "AGYD_LOG_LEVEL", "info"), "log level: debug, info, warn or error (env AGYD_LOG_LEVEL)")
 	fs.StringVar(&r.model, "model", getenv("AGYD_MODEL"), "default model for new conversations, e.g. gemini-4-carbon (env AGYD_MODEL)")
 	fs.StringVar(&r.thinking, "thinking", getenv("AGYD_THINKING"), "default thinking level: low, medium or high (env AGYD_THINKING)")
 	fs.StringVar(&r.mode, "mode", getenv("AGYD_MODE"), "default agent mode: default, accept-edits or plan (env AGYD_MODE)")
@@ -143,6 +146,21 @@ func parsePort(raw string) (int, error) {
 	return int(n), nil
 }
 
+func parseLogLevel(raw string) (slog.Level, error) {
+	switch strings.ToLower(strings.TrimSpace(raw)) {
+	case "debug":
+		return slog.LevelDebug, nil
+	case "info":
+		return slog.LevelInfo, nil
+	case "warn", "warning":
+		return slog.LevelWarn, nil
+	case "error":
+		return slog.LevelError, nil
+	default:
+		return 0, fmt.Errorf("invalid log level %q: must be debug, info, warn, or error", raw)
+	}
+}
+
 func (r *rawFlags) validate(getenv func(string) string, lookPath func(string) (string, error)) (appConfig, error) {
 	host := strings.ToLower(strings.TrimSpace(r.host))
 	if host != "localhost" && net.ParseIP(host) == nil {
@@ -156,6 +174,10 @@ func (r *rawFlags) validate(getenv func(string) string, lookPath func(string) (s
 		return appConfig{}, fmt.Errorf("agy not found on PATH; install agy-cli or pass -agy /path/to/agy")
 	}
 	policy, err := acp.ParsePermissionPolicy(r.policy)
+	if err != nil {
+		return appConfig{}, err
+	}
+	logLevel, err := parseLogLevel(r.logLevel)
 	if err != nil {
 		return appConfig{}, err
 	}
@@ -178,7 +200,7 @@ func (r *rawFlags) validate(getenv func(string) string, lookPath func(string) (s
 	return appConfig{
 		Host: host, Port: port, PortExplicit: r.portSet || getenv("AGYD_PORT") != "",
 		ACPBin: strings.TrimSpace(r.bin), ACPArgs: strings.Fields(r.args),
-		Workspace: ws, StateDir: stateDir, PermissionPolicy: policy,
+		Workspace: ws, StateDir: stateDir, PermissionPolicy: policy, LogLevel: logLevel,
 		Model: r.model, Thinking: r.thinking, Mode: r.mode, NoPrompt: r.noPrompt,
 	}, nil
 }
