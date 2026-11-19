@@ -237,7 +237,8 @@ func (m *Manager) use(ctx context.Context, id string) (acp.SessionInfo, error) {
 	return info, nil
 }
 
-// historyCwd finds id's working directory in agy's session/list.
+// historyCwd finds id's working directory in agy's session/list, falling back
+// to the default workspace when agy reports an empty cwd.
 func (m *Manager) historyCwd(ctx context.Context, id string) (string, error) {
 	list, err := m.agent.ListAgentSessions(ctx)
 	if err != nil {
@@ -245,6 +246,9 @@ func (m *Manager) historyCwd(ctx context.Context, id string) (string, error) {
 	}
 	for _, s := range list {
 		if s.SessionID == id {
+			if s.Cwd == "" {
+				return m.workspace, nil
+			}
 			return s.Cwd, nil
 		}
 	}

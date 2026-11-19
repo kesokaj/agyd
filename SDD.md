@@ -1,7 +1,7 @@
 # SDD — agyd
 
-A single Go binary (`cmd/agyd`) serves a REST/SSE API that translates calls into Agent Client Protocol (ACP v1) JSON-RPC 2.0 messages over stdio to a warm `agy acp` subprocess, keeps one current conversation with model/thinking defaults, serves embedded Swagger UI, and doubles as a terminal client (`agyd ask|new|list|use|...`) of a running server.
-Status: agreed · Last updated: 2026-11-18 · Requirements: [PRD.md](PRD.md) · Technical design: [TDD.md](TDD.md)
+A single Go binary (`cmd/agyd`) serves a REST/SSE API that translates calls into Agent Client Protocol (ACP v1) JSON-RPC 2.0 messages over stdio to per-folder `agy acp` subprocesses, keeps one current conversation with model/thinking defaults, serves embedded Swagger UI, and doubles as a terminal client (`agyd ask|new|list|use|...`) of a running server.
+Status: agreed · Last updated: 2026-11-19 · Requirements: [PRD.md](PRD.md) · Technical design: [TDD.md](TDD.md)
 
 ## Context
 
@@ -17,7 +17,7 @@ flowchart LR
   M3 --> M6["M6: internal/conversation\nCurrent pointer + settings"]
   M6 --> M2["M2: internal/acp\nJSON-RPC 2.0 Stdio Client"]
   M6 --> M5["M5: internal/config\nstate.json"]
-  M2 -->|"ACP v1 NDJSON-RPC\nstdin / stdout"| Agy["Host agy acp\n(reusing ~/.gemini login)"]
+  M2 -->|"ACP v1 NDJSON-RPC\nstdin / stdout"| Agy["Per-folder agy acp\n(exec.Cmd.Dir = folder;\nreusing ~/.gemini login)"]
   Agy -.->|"Read / Write / Shell"| Workspace["Workspace Directory\n(cwd)"]
 ```
 
@@ -28,7 +28,7 @@ Every package has one responsibility.
 | ID | Component | Responsibility | Satisfies |
 |---|---|---|---|
 | M1 | `cmd/agyd` (serve) | Entry point and first-word dispatch (serve vs client), flag and `AGYD_*` env config with `-state-dir` support (`serveconfig.go`), `8080` -> `3000` listen fallback (`listen.go`), Host allowlist for a non-loopback bind, startup conversation and model picker (`startup.go`, `picker.go`), mux composition wrapped in `api.Guard`, `log/slog`, graceful `SIGINT`/`SIGTERM` shutdown | — |
-| M2 | `internal/acp` | ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, `session/set_config_option`, `session/list`, `session/resume`, `session/update` fan-out, `session/request_permission` policy | — |
+| M2 | `internal/acp` | Per-folder `agy acp` process pool (`exec.Cmd.Dir` = folder, `os.SameFile` deduplication, pinned binary path, synchronous reap when last conversation closes), ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, `session/set_config_option`, `session/list`, `session/resume`, process-scoped `session/update` fan-out, `session/request_permission` policy | — |
 | M3 | `internal/api` | REST and SSE handlers on the Manager, route table, `Agyd-*` response headers, Host validation and `http.CrossOriginProtection` (`api.Guard`), AIP-193 errors | — |
 | M4 | `internal/web` | Embedded OpenAPI 3.1 spec (`openapi.json`), vendored Swagger UI, root redirect, CSP/nosniff headers | — |
 | M5 | `internal/config` | Flat `state.json` store (`currentConversationId`, `defaults`, `conversations`), `AGYD_STATE_DIR` resolution, safe non-blocking regular file reading (capped at 4 MiB), `ValidSettingValue`, atomic 0600 writes | — |
@@ -111,7 +111,7 @@ Architectural choices link to their ADR records (`fyr record get ADR-NNN`).
 - Scope to `agy-cli` only; other ACP backends deferred — `ADR-003`.
 - Default to loopback but allow `-host 0.0.0.0` as an explicit, warned opt-in, with the Host guard extended to the machine's own IPs and hostname — `ADR-004` (amends `ADR-002`).
 - Rename `/v1/sessions` to `/v1/conversations` (no alias), add one current conversation with model/thinking/mode settings and saved defaults, layered config with a `./.env` allowlist, `session/resume`-only restarts, and the `agyd` CLI client in the same binary — rejected: a `/v1/sessions` alias, `session/load`, unrestricted `./.env`, a separate client binary — `ADR-005` (amended by `ADR-006`).
-- Eliminate `./.env` walking and `config.env` in favour of direct flags > `AGYD_*` environment variables > saved defaults in `state.json` > built-in defaults; replace per-port instances in `state.json` with a single flat snapshot (`currentConversationId`, `defaults`, `conversations`) located via `-state-dir`/`AGYD_STATE_DIR` (default `~/.config/agyd`), written atomically (0600) and read non-blocking (`O_NONBLOCK`, 4 MiB cap); reject symlinks anywhere in `-workspace`/`AGYD_WORKSPACE` or conversation `cwd` (`400 INVALID_CWD`, naming the real path); lock hierarchy `opMu -> saveMu -> mu`; bind `8080` then `3000` when no port is set (explicit `-port`/`AGYD_PORT` never falls back), return `200 {"service":"agyd"}` on `GET /healthz`, and resolve client base URL via `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe of `8080` then `3000` — `ADR-006` (amends `ADR-005` and `ADR-002`).
+- Eliminate `./.env` walking and `config.env` in favour of direct flags > `AGYD_*` environment variables > saved defaults in `state.json` > built-in defaults; replace per-port instances in `state.json` with a single flat snapshot (`currentConversationId`, `defaults`, `conversations`) located via `-state-dir`/`AGYD_STATE_DIR` (default `~/.config/agyd`), written atomically (0600) and read non-blocking (`O_NONBLOCK`, 4 MiB cap); reject symlinks anywhere in `-workspace`/`AGYD_WORKSPACE` or conversation `cwd` (`400 INVALID_CWD`, naming the real path); isolate conversations by running one `agy acp` child process per folder (`exec.Cmd.Dir` = folder, started on first conversation there, stopped when its last conversation closes) routed from `state.json` (falling back to `session/list` `cwd` or default workspace); lock hierarchy `opMu -> saveMu -> mu` (and `Client.mu -> folderProc.mu`); bind `8080` then `3000` when no port is set (explicit `-port`/`AGYD_PORT` never falls back), return `200 {"service":"agyd"}` on `GET /healthz`, and resolve client base URL via `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe of `8080` then `3000` — `ADR-006` (amends `ADR-005` and `ADR-002`).
 
 ## Cross-cutting
 

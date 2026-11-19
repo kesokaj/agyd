@@ -72,18 +72,19 @@ func parseConfigOptions(raw json.RawMessage) []ConfigOption {
 
 // markBusy claims sessionID for a non-prompt operation so no turn, settings
 // change or close can overlap it. release must be called once.
-func (c *Client) markBusy(sessionID string) (release func(), err error) {
+func (c *Client) markBusy(sessionID string) (proc *folderProc, release func(), err error) {
 	sub := &promptSubscriber{}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.sessions[sessionID]; !ok {
-		return nil, ErrSessionNotFound
+	entry, ok := c.sessions[sessionID]
+	if !ok {
+		return nil, nil, ErrSessionNotFound
 	}
 	if _, busy := c.inFlight[sessionID]; busy {
-		return nil, ErrPromptInFlight
+		return nil, nil, ErrPromptInFlight
 	}
 	c.inFlight[sessionID] = sub
-	return func() {
+	return entry.proc, func() {
 		c.mu.Lock()
 		if c.inFlight[sessionID] == sub {
 			delete(c.inFlight, sessionID)
@@ -96,7 +97,7 @@ func (c *Client) markBusy(sessionID string) (release func(), err error) {
 // the full list agy returns. A bad id or value is ErrInvalidArgument; a
 // session in a turn is ErrPromptInFlight.
 func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value string) (SessionInfo, error) {
-	release, err := c.markBusy(sessionID)
+	p, release, err := c.markBusy(sessionID)
 	if err != nil {
 		return SessionInfo{}, err
 	}
@@ -105,28 +106,25 @@ func (c *Client) SetConfigOption(ctx context.Context, sessionID, configID, value
 		ConfigOptions json.RawMessage `json:"configOptions"`
 	}
 	params := map[string]string{"sessionId": sessionID, "configId": configID, "value": value}
-	if err := c.call(ctx, "session/set_config_option", params, &res); err != nil {
+	if err := p.call(ctx, "session/set_config_option", params, &res); err != nil {
 		return SessionInfo{}, err
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	info, ok := c.sessions[sessionID]
+	entry, ok := c.sessions[sessionID]
 	if !ok {
 		return SessionInfo{}, ErrSessionNotFound
 	}
 	if opts := parseConfigOptions(res.ConfigOptions); opts != nil {
-		info.ConfigOptions = opts
-		c.sessions[sessionID] = info
+		entry.info.ConfigOptions = opts
+		c.sessions[sessionID] = entry
 	}
-	return info, nil
+	return entry.info, nil
 }
 
 // ListAgentSessions returns every conversation agy has on this host
 // (session/list), oldest first. agy ignores a cwd filter and does not page.
 func (c *Client) ListAgentSessions(ctx context.Context) ([]AgentSession, error) {
-	if err := c.ensureReady(ctx); err != nil {
-		return nil, err
-	}
 	var res struct {
 		Sessions []struct {
 			SessionID string `json:"sessionId"`
@@ -135,7 +133,10 @@ func (c *Client) ListAgentSessions(ctx context.Context) ([]AgentSession, error) 
 			UpdatedAt string `json:"updatedAt"`
 		} `json:"sessions"`
 	}
-	if err := c.call(ctx, "session/list", map[string]any{}, &res); err != nil {
+	err := c.withAnyProc(ctx, func(p *folderProc) error {
+		return p.call(ctx, "session/list", map[string]any{}, &res)
+	})
+	if err != nil {
 		return nil, err
 	}
 	out := make([]AgentSession, 0, len(res.Sessions))
@@ -150,9 +151,10 @@ func (c *Client) ListAgentSessions(ctx context.Context) ([]AgentSession, error) 
 }
 
 // ResumeSession attaches to an existing agy conversation (session/resume, no
-// history replay) and registers it. A live session is returned as is. agy
-// resets configOptions on resume, so callers re-apply remembered settings.
-// session/load is never used: it reports success for unknown ids.
+// history replay) on its folder's ACP child and registers it. A live session
+// is returned as is. agy resets configOptions on resume, so callers re-apply
+// remembered settings. session/load is never used: it reports success for
+// unknown ids.
 func (c *Client) ResumeSession(ctx context.Context, sessionID, cwd string) (SessionInfo, error) {
 	if info, err := c.GetSession(sessionID); err == nil {
 		return info, nil
@@ -160,12 +162,15 @@ func (c *Client) ResumeSession(ctx context.Context, sessionID, cwd string) (Sess
 	if err := ValidateCwd(cwd); err != nil {
 		return SessionInfo{}, err
 	}
-	if err := c.ensureReady(ctx); err != nil {
+	p, release, err := c.acquireProc(ctx, cwd)
+	if err != nil {
 		return SessionInfo{}, err
 	}
+	defer release()
+
 	var res sessionNewResult
-	params := map[string]any{"sessionId": sessionID, "cwd": cwd, "mcpServers": []any{}}
-	if err := c.call(ctx, "session/resume", params, &res); err != nil {
+	params := map[string]any{"sessionId": sessionID, "cwd": p.dir, "mcpServers": []any{}}
+	if err := p.call(ctx, "session/resume", params, &res); err != nil {
 		if rpcErr, ok := errors.AsType[*RPCError](err); ok && strings.Contains(strings.ToLower(rpcErr.Message), "failed to read session") {
 			return SessionInfo{}, fmt.Errorf("%w: %w", ErrSessionNotFound, err)
 		}
@@ -173,7 +178,7 @@ func (c *Client) ResumeSession(ctx context.Context, sessionID, cwd string) (Sess
 	}
 	info := SessionInfo{
 		SessionID:     sessionID,
-		Cwd:           cwd,
+		Cwd:           p.dir,
 		Backend:       c.backend,
 		CreateTime:    time.Now().UTC(),
 		Modes:         res.Modes,
@@ -183,8 +188,12 @@ func (c *Client) ResumeSession(ctx context.Context, sessionID, cwd string) (Sess
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if live, ok := c.sessions[sessionID]; ok {
-		return live, nil // a concurrent resume won
+		return live.info, nil // a concurrent resume won
 	}
-	c.sessions[sessionID] = info
+	if c.closed || c.procs[p.dir] != p {
+		return SessionInfo{}, ErrProcessClosed
+	}
+	c.sessions[sessionID] = sessionEntry{info: info, proc: p}
+	p.refs++
 	return info, nil
 }

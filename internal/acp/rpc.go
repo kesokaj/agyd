@@ -1,72 +1,60 @@
 package acp
 
 import (
-	"bufio"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
-	"os/exec"
 	"strings"
 	"unicode"
 )
 
-func (c *Client) readLoop(r io.Reader, cmd *exec.Cmd) {
-	scanner := bufio.NewScanner(r)
-	scanner.Buffer(make([]byte, 64*1024), 16<<20)
-	for scanner.Scan() {
-		line := scanner.Bytes()
-		if len(line) == 0 {
-			continue
-		}
-		var msg rpcMessage
-		if err := json.Unmarshal(line, &msg); err != nil {
-			c.log.Warn("ignoring non-json stdout line from acp child", "err", err)
-			continue
-		}
-		c.dispatchIncoming(msg)
-	}
-	c.onProcessExit(cmd)
-}
-
-func (c *Client) drainStderr(r io.Reader) {
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		c.log.Debug("acp stderr", "line", scanner.Text())
-	}
-}
-
-func (c *Client) dispatchIncoming(msg rpcMessage) {
+func (p *folderProc) dispatchIncoming(msg rpcMessage) {
 	if msg.Method != "" && msg.ID != nil {
-		c.handleAgentRequest(*msg.ID, msg.Method, msg.Params)
+		p.handleAgentRequest(*msg.ID, msg.Method, msg.Params)
 		return
 	}
 	if msg.Method == "session/update" {
-		c.handleSessionUpdate(msg.Params)
+		p.client.handleSessionUpdate(p, msg.Params)
 		return
 	}
 	if msg.ID == nil {
 		return
 	}
-	c.mu.Lock()
-	call, ok := c.pending[*msg.ID]
+	p.mu.Lock()
+	call, ok := p.pending[*msg.ID]
 	if ok {
-		delete(c.pending, *msg.ID)
+		delete(p.pending, *msg.ID)
 	}
-	c.mu.Unlock()
+	p.mu.Unlock()
 	if ok {
 		call.res = msg
 		close(call.ch)
 	}
 }
 
-func (c *Client) handleAgentRequest(id int64, method string, rawParams json.RawMessage) {
+func (p *folderProc) ownsSession(sessionID string) bool {
+	if sessionID == "" {
+		return false
+	}
+	p.client.mu.Lock()
+	entry, ok := p.client.sessions[sessionID]
+	p.client.mu.Unlock()
+	return ok && entry.proc == p
+}
+
+func (p *folderProc) handleAgentRequest(id int64, method string, rawParams json.RawMessage) {
 	if method != "session/request_permission" {
-		var p sessionIDParams
-		_ = json.Unmarshal(rawParams, &p)
-		c.log.Info("unsupported agent request", "conversationId", clip(p.SessionID), "method", clip(method))
-		_ = c.writeEnvelope(map[string]any{
+		var sp sessionIDParams
+		_ = json.Unmarshal(rawParams, &sp)
+		attrs := []any{"method", clip(method)}
+		if p.ownsSession(sp.SessionID) {
+			attrs = append(attrs, "conversationId", clip(sp.SessionID))
+		} else if sp.SessionID != "" {
+			attrs = append(attrs, "claimedConversationId", clip(sp.SessionID), "dir", p.dir)
+		}
+		p.client.log.Info("unsupported agent request", attrs...)
+		_ = p.writeEnvelope(map[string]any{
 			"jsonrpc": "2.0",
 			"id":      id,
 			"error":   map[string]any{"code": -32601, "message": "method not supported by client"},
@@ -75,9 +63,22 @@ func (c *Client) handleAgentRequest(id int64, method string, rawParams json.RawM
 	}
 	var params requestPermissionParams
 	decodeErr := json.Unmarshal(rawParams, &params)
-	outcome := selectPermissionOutcome(c.cfg.PermissionPolicy, params.Options)
-	c.logPermissionDecision(params, outcome, decodeErr)
-	_ = c.writeEnvelope(map[string]any{
+	if !p.ownsSession(params.SessionID) {
+		p.client.log.Warn("unowned agent request",
+			"dir", p.dir,
+			"method", clip(method),
+			"claimedConversationId", clip(params.SessionID),
+		)
+		_ = p.writeEnvelope(map[string]any{
+			"jsonrpc": "2.0",
+			"id":      id,
+			"error":   map[string]any{"code": -32602, "message": "session does not belong to this process"},
+		})
+		return
+	}
+	outcome := selectPermissionOutcome(p.client.cfg.PermissionPolicy, params.Options)
+	p.client.logPermissionDecision(params, outcome, decodeErr)
+	_ = p.writeEnvelope(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"result":  requestPermissionResult{Outcome: outcome},
@@ -181,27 +182,27 @@ func selectPermissionOutcome(policy PermissionPolicy, opts []permissionOption) p
 	return permissionOutcome{Outcome: "cancelled"}
 }
 
-func (c *Client) call(ctx context.Context, method string, params any, out any) error {
-	c.mu.Lock()
-	if c.stdin == nil {
-		c.mu.Unlock()
+func (p *folderProc) call(ctx context.Context, method string, params any, out any) error {
+	p.mu.Lock()
+	if p.stdin == nil {
+		p.mu.Unlock()
 		return ErrProcessClosed
 	}
-	c.nextID++
-	id := c.nextID
+	p.nextID++
+	id := p.nextID
 	pc := &pendingCall{ch: make(chan struct{})}
-	c.pending[id] = pc
-	c.mu.Unlock()
+	p.pending[id] = pc
+	p.mu.Unlock()
 
-	if err := c.writeEnvelope(map[string]any{
+	if err := p.writeEnvelope(map[string]any{
 		"jsonrpc": "2.0",
 		"id":      id,
 		"method":  method,
 		"params":  params,
 	}); err != nil {
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
+		p.mu.Lock()
+		delete(p.pending, id)
+		p.mu.Unlock()
 		return fmt.Errorf("%w: %v", ErrProcessClosed, err)
 	}
 
@@ -223,15 +224,15 @@ func (c *Client) call(ctx context.Context, method string, params any, out any) e
 		}
 		return nil
 	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.pending, id)
-		c.mu.Unlock()
+		p.mu.Lock()
+		delete(p.pending, id)
+		p.mu.Unlock()
 		return ctx.Err()
 	}
 }
 
-func (c *Client) notify(method string, params any) error {
-	if err := c.writeEnvelope(map[string]any{
+func (p *folderProc) notify(method string, params any) error {
+	if err := p.writeEnvelope(map[string]any{
 		"jsonrpc": "2.0",
 		"method":  method,
 		"params":  params,
@@ -241,17 +242,17 @@ func (c *Client) notify(method string, params any) error {
 	return nil
 }
 
-func (c *Client) writeEnvelope(v any) error {
+func (p *folderProc) writeEnvelope(v any) error {
 	b, err := json.Marshal(v)
 	if err != nil {
 		return err
 	}
-	c.writeMu.Lock()
-	defer c.writeMu.Unlock()
+	p.writeMu.Lock()
+	defer p.writeMu.Unlock()
 
-	c.mu.Lock()
-	w := c.stdin
-	c.mu.Unlock()
+	p.mu.Lock()
+	w := p.stdin
+	p.mu.Unlock()
 	if w == nil {
 		return errors.New("stdin closed")
 	}

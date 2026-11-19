@@ -19,7 +19,7 @@ go vet ./... && go test -race ./...
 
 ## Architecture
 
-`cmd/agyd` starts a single-binary Go HTTP server bound to loopback by default (`127.0.0.1:8080`, falling back to `3000` when `8080` is in use and no port is set; `-host 0.0.0.0` is a warned opt-in, ADR-004/ADR-006) with Host header validation and stdlib `http.CrossOriginProtection` (CSRF). It serves OpenAPI 3.1 Swagger UI documentation (`internal/web`) and translates REST + SSE calls into ACP v1 JSON-RPC 2.0 messages over `stdin`/`stdout` of a managed `agy acp` subprocess (`internal/acp`). Access control is enforced via loopback binding, Host guard, and CSRF protection (no API token). For ADRs: `fyr record list --kind adr`.
+`cmd/agyd` starts a single-binary Go HTTP server bound to loopback by default (`127.0.0.1:8080`, falling back to `3000` when `8080` is in use and no port is set; `-host 0.0.0.0` is a warned opt-in, ADR-004/ADR-006) with Host header validation and stdlib `http.CrossOriginProtection` (CSRF). It serves OpenAPI 3.1 Swagger UI documentation (`internal/web`) and translates REST + SSE calls into ACP v1 JSON-RPC 2.0 messages over `stdin`/`stdout` of per-folder `agy acp` subprocesses (`internal/acp`, `exec.Cmd.Dir` = folder, started lazily on the first conversation there and stopped when its last live conversation closes). Access control is enforced via loopback binding, Host guard, and CSRF protection (no API token). For ADRs: `fyr record list --kind adr`.
 
 ## Testing
 

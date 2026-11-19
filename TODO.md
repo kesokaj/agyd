@@ -7,14 +7,13 @@
 
 ## Now
 
-`PLAN-folder-isolation` (`ADR-006`; Phases 0-3 complete, Phase 4a superseded by D7). Active: **Phase 4b: if S1 does not isolate (minimal)** — one `agy acp` process per folder (`exec.Cmd.Dir` = folder).
+`PLAN-folder-isolation` (`ADR-006`; Phases 0-3 and 4b complete, Phase 4a superseded by D7, `BUG-002` graduated). Active: **Phase 5: /clear** — new conversation with same folder and settings, keeping the old one in history.
 
-- [ ] One agy process per folder (`exec.Cmd.Dir` = that folder), started on the first conversation there and stopped when its last conversation closes.
-- [ ] Routing comes from the folder stored in `state.json` (Phase 1).
-- [ ] Tests with two fake ACP processes, then a live leak test.
+- [ ] `POST /v1/clear` and `POST /v1/conversations/{id}/clear`: a new conversation with the same folder and settings, which becomes current. The old one stays in history. Plus `agyd clear` in the CLI.
+- [x] If S4 shows agy clears natively, forward `/clear` instead and keep the id. (not applicable 2026-11-18: S4 = no; `ADR-006`)
 - [ ] Checkpoint: change record, commit and push, handoff.
 
-Remaining phases: P5 `/clear` (new conversation, old kept in history) - P6 405 on web routes.
+Remaining phases: P6 405 on web routes.
 
 ## Next
 
@@ -23,6 +22,7 @@ Remaining phases: P5 `/clear` (new conversation, old kept in history) - P6 405 o
 
 ## Backlog
 
+- 2026-11-19 (security phase-4b #2) optional configurable cap on concurrent per-folder `agy acp` child processes (declined for minimal Phase 4b: single-user local loopback tool).
 - 2026-11-18 (permission probe) agy reported `rm -rf rmme.txt` as run while the file stayed (its own deny rule); agyd cannot see that refusal. Consider surfacing tool_call status from `session/update` in the CLI.
 - 2026-11-18 (security permission-log #2) rate-limit or dedupe `unsupported agent request` lines per method (rebutted for now: agy is the operator's local child).
 - 2026-11-18 (security r1 #7) `GET /v1/current` resumes a non-live conversation; consider a side-effect-free read.

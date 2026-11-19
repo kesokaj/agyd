@@ -64,7 +64,7 @@ func ValidateCwd(cwd string) error {
 	return ValidateDir("cwd", cwd)
 }
 
-// NewSession calls session/new on the ACP agent and registers the session in memory.
+// NewSession starts or reuses the folder's ACP child, calls session/new, and registers the session.
 func (c *Client) NewSession(ctx context.Context, cwd string) (SessionInfo, error) {
 	if cwd == "" {
 		cwd = c.cfg.DefaultWorkspace
@@ -72,19 +72,21 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (SessionInfo, error
 	if err := ValidateCwd(cwd); err != nil {
 		return SessionInfo{}, err
 	}
-	if err := c.ensureReady(ctx); err != nil {
+	p, release, err := c.acquireProc(ctx, cwd)
+	if err != nil {
 		return SessionInfo{}, err
 	}
+	defer release()
 
 	var res sessionNewResult
-	params := sessionNewParams{Cwd: cwd, MCPServers: []any{}}
-	if err := c.call(ctx, "session/new", params, &res); err != nil {
+	params := sessionNewParams{Cwd: p.dir, MCPServers: []any{}}
+	if err := p.call(ctx, "session/new", params, &res); err != nil {
 		return SessionInfo{}, err
 	}
 
 	info := SessionInfo{
 		SessionID:     res.SessionID,
-		Cwd:           cwd,
+		Cwd:           p.dir,
 		Backend:       c.backend,
 		CreateTime:    time.Now().UTC(),
 		Modes:         res.Modes,
@@ -92,7 +94,16 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (SessionInfo, error
 		ConfigOptions: parseConfigOptions(res.ConfigOptions),
 	}
 	c.mu.Lock()
-	c.sessions[info.SessionID] = info
+	if c.closed || c.procs[p.dir] != p {
+		c.mu.Unlock()
+		return SessionInfo{}, ErrProcessClosed
+	}
+	if _, exists := c.sessions[info.SessionID]; exists {
+		c.mu.Unlock()
+		return SessionInfo{}, fmt.Errorf("duplicate acp session id %q", info.SessionID)
+	}
+	c.sessions[info.SessionID] = sessionEntry{info: info, proc: p}
+	p.refs++
 	c.mu.Unlock()
 	return info, nil
 }
@@ -101,19 +112,19 @@ func (c *Client) NewSession(ctx context.Context, cwd string) (SessionInfo, error
 func (c *Client) GetSession(sessionID string) (SessionInfo, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	info, ok := c.sessions[sessionID]
+	entry, ok := c.sessions[sessionID]
 	if !ok {
 		return SessionInfo{}, ErrSessionNotFound
 	}
-	return info, nil
+	return entry.info, nil
 }
 
 // ListSessions returns all active sessions ordered by creation time.
 func (c *Client) ListSessions() []SessionInfo {
 	c.mu.Lock()
 	out := make([]SessionInfo, 0, len(c.sessions))
-	for _, s := range c.sessions {
-		out = append(out, s)
+	for _, entry := range c.sessions {
+		out = append(out, entry.info)
 	}
 	c.mu.Unlock()
 	slices.SortFunc(out, func(a, b SessionInfo) int {
@@ -125,23 +136,32 @@ func (c *Client) ListSessions() []SessionInfo {
 	return out
 }
 
-// CloseSession calls session/close on the ACP agent and removes the session
-// from memory. A session in a turn (or a settings change) is refused with
-// ErrPromptInFlight.
+// CloseSession calls session/close on the folder's ACP child, removes the
+// session from memory, and stops the child when no conversations remain in its
+// folder. A session in a turn (or a settings change) is refused with ErrPromptInFlight.
 func (c *Client) CloseSession(ctx context.Context, sessionID string) error {
-	release, err := c.markBusy(sessionID)
+	p, release, err := c.markBusy(sessionID)
 	if err != nil {
 		return err
 	}
 	var res map[string]any
-	if err := c.call(ctx, "session/close", sessionIDParams{SessionID: sessionID}, &res); err != nil {
+	if err := p.call(ctx, "session/close", sessionIDParams{SessionID: sessionID}, &res); err != nil {
 		release()
 		return err
 	}
 	c.mu.Lock()
-	delete(c.sessions, sessionID)
+	var toStop *folderProc
+	if entry, ok := c.sessions[sessionID]; ok {
+		delete(c.sessions, sessionID)
+		if entry.proc != nil && c.releaseRefLocked(entry.proc) {
+			toStop = entry.proc
+		}
+	}
 	c.mu.Unlock()
 	release()
+	if toStop != nil {
+		toStop.stop()
+	}
 	return nil
 }
 
@@ -149,7 +169,8 @@ func (c *Client) CloseSession(ctx context.Context, sessionID string) error {
 func (c *Client) Prompt(ctx context.Context, sessionID string, blocks []ContentBlock, onUpdate func(rawUpdate []byte)) (PromptResult, error) {
 	sub := &promptSubscriber{onUpdate: onUpdate}
 	c.mu.Lock()
-	if _, ok := c.sessions[sessionID]; !ok {
+	entry, ok := c.sessions[sessionID]
+	if !ok {
 		c.mu.Unlock()
 		return PromptResult{}, ErrSessionNotFound
 	}
@@ -158,6 +179,7 @@ func (c *Client) Prompt(ctx context.Context, sessionID string, blocks []ContentB
 		return PromptResult{}, ErrPromptInFlight
 	}
 	c.inFlight[sessionID] = sub
+	p := entry.proc
 	c.mu.Unlock()
 
 	defer func() {
@@ -170,9 +192,9 @@ func (c *Client) Prompt(ctx context.Context, sessionID string, blocks []ContentB
 
 	var rpcRes sessionPromptResult
 	params := sessionPromptParams{SessionID: sessionID, Prompt: blocks}
-	if err := c.call(ctx, "session/prompt", params, &rpcRes); err != nil {
+	if err := p.call(ctx, "session/prompt", params, &rpcRes); err != nil {
 		if ctx.Err() != nil {
-			_ = c.notify("session/cancel", sessionIDParams{SessionID: sessionID})
+			_ = p.notify("session/cancel", sessionIDParams{SessionID: sessionID})
 		}
 		return PromptResult{}, err
 	}
@@ -193,26 +215,34 @@ func (c *Client) Prompt(ctx context.Context, sessionID string, blocks []ContentB
 
 // Cancel sends a session/cancel notification for an active session.
 func (c *Client) Cancel(_ context.Context, sessionID string) error {
-	if _, err := c.GetSession(sessionID); err != nil {
-		return err
+	c.mu.Lock()
+	entry, ok := c.sessions[sessionID]
+	c.mu.Unlock()
+	if !ok {
+		return ErrSessionNotFound
 	}
-	return c.notify("session/cancel", sessionIDParams{SessionID: sessionID})
+	return entry.proc.notify("session/cancel", sessionIDParams{SessionID: sessionID})
 }
 
-func (c *Client) handleSessionUpdate(rawParams json.RawMessage) {
-	var p sessionUpdateParams
-	if err := json.Unmarshal(rawParams, &p); err != nil || p.SessionID == "" {
+func (c *Client) handleSessionUpdate(p *folderProc, rawParams json.RawMessage) {
+	var up sessionUpdateParams
+	if err := json.Unmarshal(rawParams, &up); err != nil || up.SessionID == "" {
 		return
 	}
 	var env sessionUpdateEnvelope
-	_ = json.Unmarshal(p.Update, &env)
+	_ = json.Unmarshal(up.Update, &env)
 
 	c.mu.Lock()
-	c.applySettingsUpdate(p.SessionID, env)
-	sub, ok := c.inFlight[p.SessionID]
+	entry, tracked := c.sessions[up.SessionID]
+	if !tracked || entry.proc != p {
+		c.mu.Unlock()
+		return
+	}
+	c.applySettingsUpdate(up.SessionID, entry, env)
+	sub, ok := c.inFlight[up.SessionID]
 	if ok {
 		if sub.onUpdate == nil {
-			sub.updates = append(sub.updates, p.Update)
+			sub.updates = append(sub.updates, up.Update)
 		}
 		if env.SessionUpdate == "agent_message_chunk" && env.Content.Type == "text" {
 			sub.text.WriteString(env.Content.Text)
@@ -228,11 +258,8 @@ func (c *Client) handleSessionUpdate(rawParams json.RawMessage) {
 // applySettingsUpdate keeps a live session's configOptions in step with the
 // settings agy changes on its own (config_option_update carries the full
 // list, current_mode_update the new mode). The caller holds c.mu.
-func (c *Client) applySettingsUpdate(sessionID string, env sessionUpdateEnvelope) {
-	info, ok := c.sessions[sessionID]
-	if !ok {
-		return
-	}
+func (c *Client) applySettingsUpdate(sessionID string, entry sessionEntry, env sessionUpdateEnvelope) {
+	info := entry.info
 	switch env.SessionUpdate {
 	case "config_option_update":
 		if opts := parseConfigOptions(env.ConfigOptions); opts != nil {
@@ -252,5 +279,6 @@ func (c *Client) applySettingsUpdate(sessionID string, env sessionUpdateEnvelope
 	default:
 		return
 	}
-	c.sessions[sessionID] = info
+	entry.info = info
+	c.sessions[sessionID] = entry
 }

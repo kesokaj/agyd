@@ -15,15 +15,16 @@ import (
 // settings to defaults, unknown values are -32602 (ErrInvalidArgument), and
 // session/list covers every conversation, live or not.
 type fakeAgent struct {
-	mu        sync.Mutex
-	live      map[string]acp.SessionInfo
-	history   map[string]acp.AgentSession
-	busy      map[string]bool
-	newCount  int
-	setCalls  int
-	listErr   error
-	seq       int
-	closeErrs map[string]error
+	mu          sync.Mutex
+	live        map[string]acp.SessionInfo
+	history     map[string]acp.AgentSession
+	busy        map[string]bool
+	newCount    int
+	setCalls    int
+	listErr     error
+	seq         int
+	closeErrs   map[string]error
+	resumedCwds map[string]string
 	// afterGet, when set, runs once after the next GetSession returns, outside
 	// the lock: a concurrent change landing between a caller's read and its
 	// next step.
@@ -43,8 +44,9 @@ func newFakeAgent() *fakeAgent {
 			"h1": {SessionID: "h1", Cwd: "/hist/one", Title: "one", UpdateTime: time.Date(2026, 11, 1, 0, 0, 0, 0, time.UTC)},
 			"h2": {SessionID: "h2", Cwd: "/hist/two", Title: "two", UpdateTime: time.Date(2026, 11, 5, 0, 0, 0, 0, time.UTC)},
 		},
-		busy:      map[string]bool{},
-		closeErrs: map[string]error{},
+		busy:        map[string]bool{},
+		closeErrs:   map[string]error{},
+		resumedCwds: map[string]string{},
 	}
 }
 
@@ -183,6 +185,7 @@ func (f *fakeAgent) ResumeSession(_ context.Context, id, cwd string) (acp.Sessio
 	}
 	info := acp.SessionInfo{SessionID: id, Cwd: cwd, CreateTime: time.Now().UTC(), ConfigOptions: defaultOptions()}
 	f.live[id] = info
+	f.resumedCwds[id] = cwd
 	return info, nil
 }
 

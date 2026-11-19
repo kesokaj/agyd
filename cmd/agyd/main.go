@@ -77,13 +77,6 @@ func runWithListen(ctx context.Context, log *slog.Logger, cfg appConfig, listen 
 	}
 	defer func() { _ = acpClient.Close() }()
 
-	initCtx, cancelInit := context.WithTimeout(ctx, 15*time.Second)
-	err = acpClient.Start(initCtx)
-	cancelInit()
-	if err != nil {
-		log.Warn("initial acp startup failed; will retry lazily on next request", "err", err)
-	}
-
 	mgr := newManager(log, cfg, acpClient)
 	startConversation(ctx, log, cfg, mgr, os.Stdin, os.Stderr, stdinIsTerminal())
 	if ctx.Err() != nil {

@@ -14,20 +14,20 @@ import (
 func TestSettingsUpdatesFromAgent(t *testing.T) {
 	c := &Client{
 		log:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
-		sessions: map[string]SessionInfo{},
+		sessions: map[string]sessionEntry{},
 		inFlight: map[string]*promptSubscriber{},
 	}
-	c.sessions["s1"] = SessionInfo{SessionID: "s1", ConfigOptions: []ConfigOption{
+	c.sessions["s1"] = sessionEntry{info: SessionInfo{SessionID: "s1", ConfigOptions: []ConfigOption{
 		{ID: ConfigModel, Type: "select", CurrentValue: "gemini-4-carbon", Options: []ConfigValue{{Value: "gemini-4-carbon"}}},
 		{ID: ConfigMode, Type: "select", CurrentValue: "default", Options: []ConfigValue{{Value: "default"}, {Value: "plan"}}},
-	}}
+	}}}
 	send := func(update map[string]any) {
 		t.Helper()
 		raw, err := json.Marshal(map[string]any{"sessionId": "s1", "update": update})
 		if err != nil {
 			t.Fatal(err)
 		}
-		c.handleSessionUpdate(raw)
+		c.handleSessionUpdate(nil, raw)
 	}
 
 	send(map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": "plan"})
@@ -54,9 +54,29 @@ func TestSettingsUpdatesFromAgent(t *testing.T) {
 		t.Errorf("mode after malformed updates = %q, want plan", got)
 	}
 	raw, _ := json.Marshal(map[string]any{"sessionId": "ghost", "update": map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": "plan"}})
-	c.handleSessionUpdate(raw)
+	c.handleSessionUpdate(nil, raw)
 	if _, ok := c.sessions["ghost"]; ok {
 		t.Error("update for an unknown session registered it")
+	}
+
+	// An update from a different folder process must not mutate or inject chunks into s1.
+	owner := &folderProc{dir: "/folder/a"}
+	foreign := &folderProc{dir: "/folder/b"}
+	entry := c.sessions["s1"]
+	entry.proc = owner
+	c.sessions["s1"] = entry
+	sub := &promptSubscriber{}
+	c.inFlight["s1"] = sub
+
+	spoofMode, _ := json.Marshal(map[string]any{"sessionId": "s1", "update": map[string]any{"sessionUpdate": "current_mode_update", "currentModeId": "default"}})
+	spoofChunk, _ := json.Marshal(map[string]any{"sessionId": "s1", "update": map[string]any{"sessionUpdate": "agent_message_chunk", "content": map[string]any{"type": "text", "text": "spoofed"}}})
+	c.handleSessionUpdate(foreign, spoofMode)
+	c.handleSessionUpdate(foreign, spoofChunk)
+	if got := mustGet(t, c, "s1").Setting(ConfigMode); got != "plan" {
+		t.Errorf("foreign proc changed s1 mode to %q, want plan", got)
+	}
+	if sub.text.String() != "" || len(sub.updates) != 0 {
+		t.Errorf("foreign proc injected prompt output %q (%d updates)", sub.text.String(), len(sub.updates))
 	}
 }
 

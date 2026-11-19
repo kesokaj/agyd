@@ -37,7 +37,7 @@ agyd: conversation=2652ba62-... model=gemini-4-carbon thinking=high mode=default
 Prefer a browser? Open **http://127.0.0.1:8080/docs** and click **Try it out** under any endpoint.
 
 > [!IMPORTANT]
-> The agent works in the folder you start `agyd` from, unless you set `-workspace` or start a conversation elsewhere (`agyd new` uses the folder you run it from). By default it approves its own tool calls (file writes, shell commands). See [Safety](#safety).
+> The agent works in the folder you start `agyd` from, unless you set `-workspace` or start a conversation elsewhere (`agyd new` uses the folder you run it from). `agyd` runs one `agy acp` process per active workspace folder (started on the first conversation there and stopped when its last live conversation closes), keeping each folder's workspace roots isolated. By default it approves its own tool calls (file writes, shell commands). See [Safety](#safety).
 
 ## Conversations
 
