@@ -27,7 +27,7 @@ func serverPort(t *testing.T, rawURL string) int {
 	return p
 }
 
-func probeCLIEnv(t *testing.T, ports []int, stdin string, extraEnv map[string]string) (cliEnv, *bytes.Buffer, *bytes.Buffer) {
+func probeCLIEnv(t *testing.T, ports []int, extraEnv map[string]string) (cliEnv, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	env := map[string]string{"HOME": t.TempDir()}
 	for k, v := range extraEnv {
@@ -35,7 +35,6 @@ func probeCLIEnv(t *testing.T, ports []int, stdin string, extraEnv map[string]st
 	}
 	var stdout, stderr bytes.Buffer
 	return cliEnv{
-		stdin:        strings.NewReader(stdin),
 		stdout:       &stdout,
 		stderr:       &stderr,
 		getenv:       func(k string) string { return env[k] },
@@ -47,7 +46,7 @@ func probeCLIEnv(t *testing.T, ports []int, stdin string, extraEnv map[string]st
 }
 
 func TestCLIProbeDiscovery(t *testing.T) {
-	t.Run("skips non-agyd listener on first port without sending prompt, uses agyd on fallback port", func(t *testing.T) {
+	t.Run("skips non-agyd listener on first port without sending command, uses agyd on fallback port", func(t *testing.T) {
 		var nonAgydPaths []string
 		gnubby := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			_, _ = io.ReadAll(r.Body)
@@ -58,20 +57,20 @@ func TestCLIProbeDiscovery(t *testing.T) {
 		defer gnubby.Close()
 
 		agydSrv := newFakeAgyd(t)
-		env, stdout, stderr := probeCLIEnv(t, []int{serverPort(t, gnubby.URL), serverPort(t, agydSrv.srv.URL)}, "", nil)
+		env, stdout, stderr := probeCLIEnv(t, []int{serverPort(t, gnubby.URL), serverPort(t, agydSrv.srv.URL)}, nil)
 
-		if code := runCLI(t, t.Context(), env, "ask", "secret-prompt"); code != 0 {
+		if code := runCLI(t, t.Context(), env, "model", "claude-sonnet-5-5"); code != 0 {
 			t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr)
 		}
 		if got := strings.Join(nonAgydPaths, ","); got != "GET /healthz" {
 			t.Fatalf("non-agyd server saw requests %q, want GET /healthz only", got)
 		}
 		reqs := agydSrv.requests()
-		if len(reqs) != 2 || reqs[0].path != "/healthz" || reqs[1].path != "/v1/prompt" {
-			t.Fatalf("agyd requests = %+v, want /healthz then /v1/prompt", reqs)
+		if len(reqs) != 2 || reqs[0].path != "/healthz" || reqs[1].method != http.MethodPatch || reqs[1].path != "/v1/current" {
+			t.Fatalf("agyd requests = %+v, want /healthz then PATCH /v1/current", reqs)
 		}
-		if stdout.String() != "Hello, world\n" {
-			t.Errorf("stdout = %q, want Hello, world\\n", stdout)
+		if !strings.Contains(stdout.String(), "conversation  c1") {
+			t.Errorf("stdout = %q, want conversation  c1", stdout)
 		}
 		if stderr.String() != infoLine {
 			t.Errorf("stderr = %q, want single info line %q", stderr, infoLine)
@@ -81,7 +80,7 @@ func TestCLIProbeDiscovery(t *testing.T) {
 	t.Run("prefers first port when agyd answers there and never touches second", func(t *testing.T) {
 		first := newFakeAgyd(t)
 		second := newFakeAgyd(t)
-		env, stdout, _ := probeCLIEnv(t, []int{serverPort(t, first.srv.URL), serverPort(t, second.srv.URL)}, "", nil)
+		env, stdout, _ := probeCLIEnv(t, []int{serverPort(t, first.srv.URL), serverPort(t, second.srv.URL)}, nil)
 
 		if code := runCLI(t, t.Context(), env, "current"); code != 0 {
 			t.Fatalf("exit = %d, want 0", code)
@@ -142,7 +141,7 @@ func TestCLIProbeDiscovery(t *testing.T) {
 			hungLn.Addr().(*net.TCPAddr).Port,
 			serverPort(t, agydSrv.srv.URL),
 		}
-		env, _, stderr := probeCLIEnv(t, ports, "", nil)
+		env, _, stderr := probeCLIEnv(t, ports, nil)
 		// Even if a caller supplies an http.Client with nil CheckRedirect, probe must not follow redirects.
 		env.httpClient = &http.Client{}
 		if code := runCLI(t, t.Context(), env, "current"); code != 0 {
@@ -155,10 +154,10 @@ func TestCLIProbeDiscovery(t *testing.T) {
 	})
 
 	t.Run("when neither port answers as agyd, exits 1 without sending command to non-agyd", func(t *testing.T) {
-		var sawPrompt atomic.Bool
+		var sawCommand atomic.Bool
 		gnubby := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path != "/healthz" {
-				sawPrompt.Store(true)
+				sawCommand.Store(true)
 			}
 			w.WriteHeader(http.StatusNotFound)
 		}))
@@ -166,13 +165,13 @@ func TestCLIProbeDiscovery(t *testing.T) {
 		p1 := serverPort(t, gnubby.URL)
 		p2 := freeLoopbackPort(t)
 
-		env, _, stderr := probeCLIEnv(t, []int{p1, p2}, "", nil)
-		code := runCLI(t, t.Context(), env, "ask", "do-not-leak")
+		env, _, stderr := probeCLIEnv(t, []int{p1, p2}, nil)
+		code := runCLI(t, t.Context(), env, "model", "claude-sonnet-5-5")
 		if code != 1 {
 			t.Fatalf("exit = %d, want 1; stderr: %s", code, stderr)
 		}
-		if sawPrompt.Load() {
-			t.Fatal("CLI sent prompt to non-agyd listener when probe failed")
+		if sawCommand.Load() {
+			t.Fatal("CLI sent command to non-agyd listener when probe failed")
 		}
 		for _, want := range []string{strconv.Itoa(p1), strconv.Itoa(p2)} {
 			if !strings.Contains(stderr.String(), want) {
@@ -191,7 +190,7 @@ func TestCLIProbeDiscovery(t *testing.T) {
 		defer decoy.Close()
 
 		direct := newFakeAgyd(t)
-		env, stdout, stderr := probeCLIEnv(t, []int{serverPort(t, decoy.URL)}, "", map[string]string{
+		env, stdout, stderr := probeCLIEnv(t, []int{serverPort(t, decoy.URL)}, map[string]string{
 			"AGYD_URL": direct.srv.URL + "/",
 		})
 		if code := runCLI(t, t.Context(), env, "current"); code != 0 {
@@ -217,9 +216,9 @@ func TestCLIProbeDiscovery(t *testing.T) {
 		}))
 		defer srv.Close()
 
-		env, _, _ := probeCLIEnv(t, []int{serverPort(t, srv.URL)}, "   \n", nil)
-		if code := runCLI(t, t.Context(), env, "ask"); code != 2 {
-			t.Fatalf("empty ask exit = %d, want 2", code)
+		env, _, _ := probeCLIEnv(t, []int{serverPort(t, srv.URL)}, nil)
+		if code := runCLI(t, t.Context(), env, "use"); code != 2 {
+			t.Fatalf("empty use exit = %d, want 2", code)
 		}
 		if code := runCLI(t, t.Context(), env, "model"); code != 2 {
 			t.Fatalf("empty model exit = %d, want 2", code)

@@ -3,7 +3,6 @@ package main
 import (
 	"context"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strings"
@@ -26,30 +25,6 @@ type settingsBody struct {
 
 func (o *cliOpts) settingsBody() settingsBody {
 	return settingsBody{Model: o.model, ThinkingLevel: o.thinking, Mode: o.mode}
-}
-
-// runAsk: POST /v1/prompt (or /v1/conversations/{id}/prompt), streamed as
-// SSE; --json sends a buffered request and prints the PromptResult.
-func runAsk(ctx context.Context, c *cli, o *cliOpts, args []string) error {
-	prompt := strings.Join(args, " ")
-	if len(args) == 0 {
-		b, err := io.ReadAll(io.LimitReader(c.env.stdin, 1<<20))
-		if err != nil {
-			return fmt.Errorf("reading prompt from stdin: %w", err)
-		}
-		prompt = string(b)
-	}
-	if strings.TrimSpace(prompt) == "" {
-		return usageErr(`empty prompt; usage: agyd ask "<prompt>" (or pipe it on stdin)`)
-	}
-	path := "/v1/prompt"
-	if o.conversation != "" {
-		path = "/v1/conversations/" + url.PathEscape(o.conversation) + "/prompt"
-	}
-	if c.json {
-		return c.call(ctx, http.MethodPost, path, map[string]string{"prompt": prompt}, nil)
-	}
-	return c.streamPrompt(ctx, path, prompt)
 }
 
 // runNew: POST /v1/conversations with cwd = the folder the CLI runs in.

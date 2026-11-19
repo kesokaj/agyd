@@ -3,7 +3,6 @@ package main
 import (
 	"bytes"
 	"context"
-	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -15,7 +14,6 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"agyd/internal/api"
 )
@@ -26,7 +24,6 @@ const (
 	listBody     = `{"items":[{"conversationId":"c1","cwd":"/w","live":true,"current":true,"model":"gemini-4-carbon","thinkingLevel":"medium"},{"conversationId":"hist_1","cwd":"/hist","title":"old one","live":false,"current":false,"updateTime":"2026-11-01T00:00:00Z"}]}` + "\n"
 	modelsBody   = `{"models":[{"value":"gemini-4-carbon","name":"Gemini 4 Carbon"},{"value":"claude-sonnet-5-5","name":"Claude Sonnet 5.5"}],"thinkingLevels":[{"value":"low","name":"Low"},{"value":"medium","name":"Medium"}],"modes":[{"value":"default","name":"Default"}]}` + "\n"
 	defaultsBody = `{"model":"gemini-4-carbon","thinkingLevel":"high"}` + "\n"
-	promptBody   = `{"conversationId":"c1","model":"gemini-4-carbon","stopReason":"end_turn","text":"Hello, world"}` + "\n"
 	noCurrent    = `{"error":{"code":404,"status":"NOT_FOUND","message":"no current conversation; create one or use one","details":[{"@type":"type.googleapis.com/google.rpc.ErrorInfo","reason":"NO_CURRENT_CONVERSATION","domain":"agyd.local"}]}}` + "\n"
 	infoLine     = "agyd: conversation=c1 model=gemini-4-carbon thinking=medium mode=default\n"
 )
@@ -40,8 +37,7 @@ type recordedRequest struct {
 type fakeAgyd struct {
 	mu        sync.Mutex
 	reqs      []recordedRequest
-	noCurrent bool                                         // no current conversation: 404s and no Agyd-* headers
-	sse       func(w http.ResponseWriter, r *http.Request) // overrides the SSE prompt reply
+	noCurrent bool // no current conversation: 404s and no Agyd-* headers
 	srv       *httptest.Server
 }
 
@@ -57,7 +53,7 @@ func (f *fakeAgyd) serve(w http.ResponseWriter, r *http.Request) {
 	b, _ := io.ReadAll(r.Body)
 	f.mu.Lock()
 	f.reqs = append(f.reqs, recordedRequest{r.Method, r.URL.EscapedPath(), r.Header.Get("Accept"), string(b)})
-	none, sse := f.noCurrent, f.sse
+	none := f.noCurrent
 	f.mu.Unlock()
 	if !none {
 		w.Header().Set(api.HeaderConversation, "c1")
@@ -75,17 +71,6 @@ func (f *fakeAgyd) serve(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, `{"service":"agyd"}`+"\n")
 	case none && (path == "/v1/current" || path == "/v1/clear"):
 		reply(http.StatusNotFound, noCurrent)
-	case strings.HasSuffix(path, "/prompt") && strings.Contains(r.Header.Get("Accept"), "text/event-stream"):
-		if sse != nil {
-			sse(w, r)
-			return
-		}
-		writeSSE(w, "session_update", `{"sessionId":"c1","update":{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"thinking..."}}}`)
-		writeSSE(w, "session_update", `{"sessionId":"c1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello, "}}}`)
-		writeSSE(w, "session_update", `{"sessionId":"c1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"world"}}}`)
-		writeSSE(w, "prompt_done", strings.TrimSpace(promptBody))
-	case strings.HasSuffix(path, "/prompt"):
-		reply(http.StatusOK, promptBody)
 	case path == "/v1/conversations" && r.Method == http.MethodGet:
 		reply(http.StatusOK, listBody)
 	case path == "/v1/conversations" || path == "/v1/clear" || strings.HasSuffix(path, "/clear"):
@@ -99,15 +84,6 @@ func (f *fakeAgyd) serve(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func writeSSE(w http.ResponseWriter, event, data string) {
-	if w.Header().Get("Content-Type") == "" {
-		w.Header().Set("Content-Type", "text/event-stream")
-		w.WriteHeader(http.StatusOK)
-	}
-	_, _ = fmt.Fprintf(w, "event: %s\ndata: %s\n\n", event, data)
-	w.(http.Flusher).Flush()
-}
-
 func (f *fakeAgyd) requests() []recordedRequest {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -115,7 +91,7 @@ func (f *fakeAgyd) requests() []recordedRequest {
 }
 
 // testCLIEnv points the client at addr through AGYD_HOST/AGYD_PORT.
-func testCLIEnv(t *testing.T, addr, stdin string, extraEnv map[string]string) (cliEnv, *bytes.Buffer, *bytes.Buffer) {
+func testCLIEnv(t *testing.T, addr string, extraEnv map[string]string) (cliEnv, *bytes.Buffer, *bytes.Buffer) {
 	t.Helper()
 	host, port, err := net.SplitHostPort(addr)
 	if err != nil {
@@ -127,7 +103,7 @@ func testCLIEnv(t *testing.T, addr, stdin string, extraEnv map[string]string) (c
 	}
 	var stdout, stderr bytes.Buffer
 	return cliEnv{
-		stdin: strings.NewReader(stdin), stdout: &stdout, stderr: &stderr,
+		stdout: &stdout, stderr: &stderr,
 		getenv:     func(k string) string { return env[k] },
 		getwd:      func() (string, error) { return "/work/here", nil },
 		httpClient: &http.Client{},
@@ -156,8 +132,6 @@ func TestCLICommandsHitTheirEndpoints(t *testing.T) {
 		body                 string
 		stdout               []string // substrings of the text output
 	}{
-		{[]string{"ask", "hello", "world"}, "POST", "/v1/prompt", "text/event-stream", `{"prompt":"hello world"}`, []string{"Hello, world\n"}},
-		{[]string{"ask", "--conversation", "c/2", "hi"}, "POST", "/v1/conversations/c%2F2/prompt", "text/event-stream", `{"prompt":"hi"}`, nil},
 		{[]string{"new", "--model", "claude-sonnet-5-5", "--thinking", "high"}, "POST", "/v1/conversations", "application/json",
 			`{"cwd":"/work/here","model":"claude-sonnet-5-5","thinkingLevel":"high"}`, []string{"conversation  c1", "model         gemini-4-carbon"}},
 		{[]string{"clear"}, "POST", "/v1/clear", "application/json", "", []string{"conversation  c1", "cwd           /w"}},
@@ -176,7 +150,7 @@ func TestCLICommandsHitTheirEndpoints(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
 			f := newFakeAgyd(t)
-			env, stdout, stderr := testCLIEnv(t, fakeAddr(f), "", nil)
+			env, stdout, stderr := testCLIEnv(t, fakeAddr(f), nil)
 			if code := runCLI(t, t.Context(), env, tt.args...); code != 0 {
 				t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr)
 			}
@@ -210,14 +184,15 @@ func TestCLIJSONPrintsTheRawResponse(t *testing.T) {
 		{[]string{"list", "--json"}, "application/json", listBody},
 		{[]string{"models", "--json"}, "application/json", modelsBody},
 		{[]string{"defaults", "--json"}, "application/json", defaultsBody},
-		{[]string{"ask", "hi", "--json"}, "application/json", promptBody}, // flag after the prompt; buffered, not SSE
+		{[]string{"use", "hist_1", "--json"}, "application/json", convBody},            // flag after positional arg
+		{[]string{"model", "gemini-4-carbon", "--json"}, "application/json", convBody}, // flag after positional arg
 		{[]string{"new", "--json"}, "application/json", convBody},
 		{[]string{"clear", "--json"}, "application/json", convBody},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
 			f := newFakeAgyd(t)
-			env, stdout, stderr := testCLIEnv(t, fakeAddr(f), "", nil)
+			env, stdout, stderr := testCLIEnv(t, fakeAddr(f), nil)
 			if code := runCLI(t, t.Context(), env, tt.args...); code != 0 {
 				t.Fatalf("exit = %d, want 0; stderr: %s", code, stderr)
 			}
@@ -238,7 +213,7 @@ func TestCLIErrorsShowInfoLineAndEnvelope(t *testing.T) {
 	f := newFakeAgyd(t)
 	f.noCurrent = true
 
-	env, stdout, stderr := testCLIEnv(t, fakeAddr(f), "", nil)
+	env, stdout, stderr := testCLIEnv(t, fakeAddr(f), nil)
 	if code := runCLI(t, t.Context(), env, "current"); code != 1 {
 		t.Fatalf("exit = %d, want 1", code)
 	}
@@ -250,7 +225,7 @@ func TestCLIErrorsShowInfoLineAndEnvelope(t *testing.T) {
 		t.Errorf("stdout = %q, want empty", stdout)
 	}
 
-	env, stdout, _ = testCLIEnv(t, fakeAddr(f), "", nil)
+	env, stdout, _ = testCLIEnv(t, fakeAddr(f), nil)
 	if code := runCLI(t, t.Context(), env, "current", "--json"); code != 1 {
 		t.Fatalf("--json exit = %d, want 1", code)
 	}
@@ -258,73 +233,10 @@ func TestCLIErrorsShowInfoLineAndEnvelope(t *testing.T) {
 		t.Errorf("--json stdout = %q, want the error envelope", stdout)
 	}
 
-	env, stdout, stderr = testCLIEnv(t, fakeAddr(f), "", nil)
+	env, stdout, stderr = testCLIEnv(t, fakeAddr(f), nil)
 	if code := runCLI(t, t.Context(), env, "clear"); code != 1 || stderr.String() != want || stdout.Len() != 0 {
 		t.Errorf("clear with no current: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
-}
-
-func TestCLIAskStreaming(t *testing.T) {
-	t.Run("prompt from stdin", func(t *testing.T) {
-		f := newFakeAgyd(t)
-		env, stdout, _ := testCLIEnv(t, fakeAddr(f), "from a pipe\n", nil)
-		if code := runCLI(t, t.Context(), env, "ask"); code != 0 {
-			t.Fatalf("exit = %d, want 0", code)
-		}
-		if got := f.requests()[0].body; got != `{"prompt":"from a pipe\n"}` {
-			t.Errorf("body = %s", got)
-		}
-		if stdout.String() != "Hello, world\n" {
-			t.Errorf("stdout = %q", stdout)
-		}
-	})
-
-	t.Run("prompt_error mid-stream fails after the partial text", func(t *testing.T) {
-		f := newFakeAgyd(t)
-		f.sse = func(w http.ResponseWriter, _ *http.Request) {
-			writeSSE(w, "session_update", `{"sessionId":"c1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"partial"}}}`)
-			writeSSE(w, "prompt_error", `{"error":{"code":502,"status":"BAD_GATEWAY","message":"acp child process exited unexpectedly","details":[{"reason":"ACP_PROCESS_EXITED"}]}}`)
-		}
-		env, stdout, stderr := testCLIEnv(t, fakeAddr(f), "", nil)
-		if code := runCLI(t, t.Context(), env, "ask", "hi"); code != 1 {
-			t.Fatalf("exit = %d, want 1", code)
-		}
-		if stdout.String() != "partial" || !strings.Contains(stderr.String(), "502 BAD_GATEWAY: acp child process exited unexpectedly (ACP_PROCESS_EXITED)") {
-			t.Errorf("stdout = %q, stderr = %q", stdout, stderr)
-		}
-	})
-
-	t.Run("stream that ends without prompt_done fails", func(t *testing.T) {
-		f := newFakeAgyd(t)
-		f.sse = func(w http.ResponseWriter, _ *http.Request) {
-			writeSSE(w, "session_update", `{"sessionId":"c1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"cut"}}}`)
-		}
-		env, _, stderr := testCLIEnv(t, fakeAddr(f), "", nil)
-		if code := runCLI(t, t.Context(), env, "ask", "hi"); code != 1 || !strings.Contains(stderr.String(), errStreamEnded.Error()) {
-			t.Errorf("exit = %d, stderr = %q; want 1 and %q", code, stderr, errStreamEnded)
-		}
-	})
-
-	t.Run("interrupt drops the connection so agyd cancels the turn", func(t *testing.T) {
-		f := newFakeAgyd(t)
-		ctx, cancel := context.WithCancel(t.Context())
-		serverSawCancel := make(chan struct{})
-		f.sse = func(w http.ResponseWriter, r *http.Request) {
-			writeSSE(w, "session_update", `{"sessionId":"c1","update":{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"long"}}}`)
-			cancel() // the operator presses Ctrl-C mid-turn
-			<-r.Context().Done()
-			close(serverSawCancel)
-		}
-		env, _, stderr := testCLIEnv(t, fakeAddr(f), "", nil)
-		if code := runCLI(t, ctx, env, "ask", "hi"); code != 1 || !strings.Contains(stderr.String(), "interrupted") {
-			t.Fatalf("exit = %d, stderr = %q; want 1 and interrupted", code, stderr)
-		}
-		select {
-		case <-serverSawCancel:
-		case <-time.After(5 * time.Second):
-			t.Error("agyd never saw the request context cancelled")
-		}
-	})
 }
 
 func TestCLIUsageErrorsSendNothing(t *testing.T) {
@@ -336,12 +248,12 @@ func TestCLIUsageErrorsSendNothing(t *testing.T) {
 		{"clear", "."},
 		{"clear", ".."},
 		{"model"},
-		{"ask", "--bogus", "hi"},
+		{"current", "--bogus"},
 		{"current", "extra"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			f := newFakeAgyd(t)
-			env, _, stderr := testCLIEnv(t, fakeAddr(f), "", nil)
+			env, _, stderr := testCLIEnv(t, fakeAddr(f), nil)
 			if code := runCLI(t, t.Context(), env, args...); code != 2 {
 				t.Errorf("exit = %d, want 2; stderr: %s", code, stderr)
 			}
@@ -350,56 +262,53 @@ func TestCLIUsageErrorsSendNothing(t *testing.T) {
 			}
 		})
 	}
-	t.Run("ask with empty stdin", func(t *testing.T) {
-		f := newFakeAgyd(t)
-		env, _, _ := testCLIEnv(t, fakeAddr(f), "  \n", nil)
-		if code := runCLI(t, t.Context(), env, "ask"); code != 2 || len(f.requests()) != 0 {
-			t.Errorf("exit = %d, requests = %d; want 2 and none", code, len(f.requests()))
-		}
-	})
 }
 
 func TestCLIUnreachableServer(t *testing.T) {
 	f := newFakeAgyd(t)
 	addr := fakeAddr(f)
 	f.srv.Close()
-	env, _, stderr := testCLIEnv(t, addr, "", nil)
+	env, _, stderr := testCLIEnv(t, addr, nil)
 	if code := runCLI(t, t.Context(), env, "current"); code != 1 || !strings.Contains(stderr.String(), "cannot reach agyd at http://"+addr) {
 		t.Errorf("exit = %d, stderr = %q", code, stderr)
 	}
 }
 
 func TestDispatchServeVersusClient(t *testing.T) {
-	tests := []struct {
-		args     []string
-		wantCmd  string
-		wantRest []string
-		wantErr  bool
-	}{
-		{nil, "serve", nil, false},
-		{[]string{"-port", "9090"}, "serve", []string{"-port", "9090"}, false},
-		{[]string{"--host=0.0.0.0"}, "serve", []string{"--host=0.0.0.0"}, false},
-		{[]string{"-help"}, "serve", []string{"-help"}, false},
-		{[]string{"serve"}, "serve", []string{}, false},
-		{[]string{"serve", "-port", "9090"}, "serve", []string{"-port", "9090"}, false},
-		{[]string{"help"}, "help", []string{}, false},
-		{[]string{"ask", "hi", "--json"}, "ask", []string{"hi", "--json"}, false},
-		{[]string{"bogus"}, "", nil, true},
-		{[]string{"Ask"}, "", nil, true},
+	type dispatchCase struct {
+		args          []string
+		wantCmd       string
+		wantRest      []string
+		wantErr       bool
+		wantErrSubstr string
+	}
+	tests := []dispatchCase{
+		{nil, "serve", nil, false, ""},
+		{[]string{"-port", "9090"}, "serve", []string{"-port", "9090"}, false, ""},
+		{[]string{"--host=0.0.0.0"}, "serve", []string{"--host=0.0.0.0"}, false, ""},
+		{[]string{"-help"}, "serve", []string{"-help"}, false, ""},
+		{[]string{"serve"}, "serve", []string{}, false, ""},
+		{[]string{"serve", "-port", "9090"}, "serve", []string{"-port", "9090"}, false, ""},
+		{[]string{"help"}, "help", []string{}, false, ""},
+		{[]string{"ask"}, "", nil, true, `unknown command "ask"`},
+		{[]string{"ask", "hi", "--json"}, "", nil, true, `unknown command "ask"`},
+		{[]string{"bogus"}, "", nil, true, `unknown command "bogus"`},
+		{[]string{"Ask"}, "", nil, true, `unknown command "Ask"`},
 	}
 	for _, name := range cliOrder {
-		tests = append(tests, struct {
-			args     []string
-			wantCmd  string
-			wantRest []string
-			wantErr  bool
-		}{[]string{name}, name, []string{}, false})
+		tests = append(tests, dispatchCase{[]string{name}, name, []string{}, false, ""})
 	}
 	for _, tt := range tests {
 		cmd, rest, err := dispatch(tt.args)
 		if (err != nil) != tt.wantErr || cmd != tt.wantCmd || !slices.Equal(rest, tt.wantRest) {
 			t.Errorf("dispatch(%q) = %q, %q, %v; want %q, %q, err %v", tt.args, cmd, rest, err, tt.wantCmd, tt.wantRest, tt.wantErr)
 		}
+		if tt.wantErrSubstr != "" && (err == nil || !strings.Contains(err.Error(), tt.wantErrSubstr)) {
+			t.Errorf("dispatch(%q) err = %v; want substring %q", tt.args, err, tt.wantErrSubstr)
+		}
+	}
+	if slices.Contains(cliOrder, "ask") {
+		t.Errorf("cliOrder contains dropped command %q: %v", "ask", cliOrder)
 	}
 	if len(cliOrder) != len(cliCommands) {
 		t.Errorf("cliOrder has %d names, cliCommands %d", len(cliOrder), len(cliCommands))
@@ -407,16 +316,19 @@ func TestDispatchServeVersusClient(t *testing.T) {
 }
 
 func TestClientHelp(t *testing.T) {
-	env, stdout, _ := testCLIEnv(t, "127.0.0.1:1", "", nil)
+	env, stdout, _ := testCLIEnv(t, "127.0.0.1:1", nil)
 	if code := runClient(t.Context(), "help", nil, env); code != 0 {
 		t.Fatalf("help exit = %d", code)
 	}
-	for _, name := range cliOrder {
+	if strings.Contains(stdout.String(), "\n  ask") {
+		t.Errorf("help still lists dropped command ask:\n%s", stdout)
+	}
+	for _, name := range []string{"current", "list", "new", "use", "clear", "model", "models", "defaults"} {
 		if !strings.Contains(stdout.String(), "\n  "+name) {
 			t.Errorf("help does not list %q:\n%s", name, stdout)
 		}
 	}
-	env, stdout, _ = testCLIEnv(t, "127.0.0.1:1", "", nil)
+	env, stdout, _ = testCLIEnv(t, "127.0.0.1:1", nil)
 	if code := runCLI(t, t.Context(), env, "new", "-h"); code != 0 || !strings.Contains(stdout.String(), "Usage: agyd new") || !strings.Contains(stdout.String(), "-thinking") {
 		t.Errorf("new -h exit = %d, stdout:\n%s", code, stdout)
 	}
@@ -504,7 +416,7 @@ func TestCLIDoesNotFollowRedirects(t *testing.T) {
 	}))
 	defer redirector.Close()
 
-	env, _, stderr := testCLIEnv(t, strings.TrimPrefix(redirector.URL, "http://"), "", nil)
+	env, _, stderr := testCLIEnv(t, strings.TrimPrefix(redirector.URL, "http://"), nil)
 	env.httpClient = osCLIEnv().httpClient
 	if code := runCLI(t, t.Context(), env, "current"); code == 0 {
 		t.Errorf("exit code 0 on a redirect; stderr %q", stderr.String())

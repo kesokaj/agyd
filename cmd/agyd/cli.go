@@ -12,12 +12,11 @@ import (
 	"time"
 )
 
-// The agyd CLI (D8): bare `agyd` or `agyd serve` runs the server; the
-// subcommands below are clients of a running agyd's HTTP API.
+// The agyd CLI (D8, ADR-007): bare `agyd` or `agyd serve` runs the server; the
+// subcommands below are a thin control plane over a running agyd's /v1/* API.
 
 // cliEnv is everything a client command touches, so tests can inject it.
 type cliEnv struct {
-	stdin          io.Reader
 	stdout, stderr io.Writer
 	getenv         func(string) string
 	getwd          func() (string, error)
@@ -28,11 +27,11 @@ type cliEnv struct {
 
 func osCLIEnv() cliEnv {
 	return cliEnv{
-		stdin: os.Stdin, stdout: os.Stdout, stderr: os.Stderr,
+		stdout: os.Stdout, stderr: os.Stderr,
 		getenv: os.Getenv, getwd: os.Getwd,
-		httpClient: &http.Client{ // no timeout: ask streams; Ctrl-C cancels the context
+		httpClient: &http.Client{ // Ctrl-C cancels ctx; new/use may start a folder agy acp process
 			// agyd never redirects; whatever else answers on the port must not
-			// steer a prompt to another host.
+			// steer a request to another host.
 			CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
 		},
 	}
@@ -44,7 +43,6 @@ type cliOpts struct {
 	host, port            string
 	hostSet, portSet      bool
 	model, thinking, mode string
-	conversation          string
 }
 
 func (o *cliOpts) hasSettings() bool { return o.model != "" || o.thinking != "" || o.mode != "" }
@@ -52,7 +50,7 @@ func (o *cliOpts) hasSettings() bool { return o.model != "" || o.thinking != "" 
 type cliCommand struct {
 	args, summary string
 	minArgs       int
-	maxArgs       int // -1: any
+	maxArgs       int
 	flags         func(fs *flag.FlagSet, o *cliOpts)
 	run           func(ctx context.Context, c *cli, o *cliOpts, args []string) error
 }
@@ -69,13 +67,6 @@ func settingFlags(withModel bool) func(fs *flag.FlagSet, o *cliOpts) {
 
 // cliCommands is the client command table; dispatch routes these names here.
 var cliCommands = map[string]cliCommand{
-	"ask": {
-		args: `"<prompt>"`, summary: "prompt the current conversation and stream the reply (no prompt: read stdin)",
-		maxArgs: -1, run: runAsk,
-		flags: func(fs *flag.FlagSet, o *cliOpts) {
-			fs.StringVar(&o.conversation, "conversation", "", "prompt this live conversation instead of the current one")
-		},
-	},
 	"new": {
 		summary: "create a conversation in this folder and make it current",
 		flags:   settingFlags(true), run: runNew,
@@ -98,7 +89,7 @@ var cliCommands = map[string]cliCommand{
 	},
 }
 
-var cliOrder = []string{"ask", "new", "clear", "list", "use", "current", "model", "models", "defaults"}
+var cliOrder = []string{"current", "list", "new", "use", "clear", "model", "models", "defaults"}
 
 // dispatch picks the serve path or a client command from the arguments.
 // Bare `agyd`, `agyd serve ...` and `agyd -flag ...` serve.
@@ -122,14 +113,14 @@ func dispatch(args []string) (cmd string, rest []string, err error) {
 func clientUsage() string {
 	var b strings.Builder
 	b.WriteString("Usage:\n  agyd [serve] [flags]      run the server (agyd -help lists its flags)\n")
-	b.WriteString("  agyd <command> [flags]    talk to a running agyd\n\nCommands:\n")
+	b.WriteString("  agyd <command> [flags]    manage a running agyd (prompt via POST /v1/prompt or /docs)\n\nCommands:\n")
 	for _, name := range cliOrder {
 		c := cliCommands[name]
 		fmt.Fprintf(&b, "  %-24s %s\n", strings.TrimSpace(name+" "+c.args), c.summary)
 	}
 	b.WriteString("\nEvery command prints the conversation, model and thinking level to stderr,\n")
-	b.WriteString("and takes --json (raw API response on stdout), --host and --port\n")
-	b.WriteString("(default: AGYD_URL or AGYD_HOST/AGYD_PORT from the environment, else probes 127.0.0.1:8080 then 3000).\n")
+	b.WriteString("readable text on stdout by default, and takes --json (raw API response for scripts),\n")
+	b.WriteString("--host and --port (default: AGYD_URL or AGYD_HOST/AGYD_PORT, else probes 127.0.0.1:8080 then 3000).\n")
 	return b.String()
 }
 
@@ -173,7 +164,7 @@ type usageErr string
 func (e usageErr) Error() string { return string(e) }
 
 // parseClientArgs parses flags anywhere among the positional arguments, so
-// `agyd ask "hi" --json` works; "--" ends flag parsing.
+// `agyd model gemini-4-carbon --json` works; "--" ends flag parsing.
 func parseClientArgs(name string, cmd cliCommand, args []string, env cliEnv) (*cliOpts, []string, error) {
 	o := &cliOpts{}
 	fs := flag.NewFlagSet("agyd "+name, flag.ContinueOnError)
@@ -214,7 +205,7 @@ func parseClientArgs(name string, cmd cliCommand, args []string, env cliEnv) (*c
 		}
 		pos, args = append(pos, rest[0]), rest[1:]
 	}
-	if len(pos) < cmd.minArgs || (cmd.maxArgs >= 0 && len(pos) > cmd.maxArgs) {
+	if len(pos) < cmd.minArgs || len(pos) > cmd.maxArgs {
 		return nil, nil, fmt.Errorf("want %s, got %d argument(s); usage: agyd %s",
 			argCount(cmd), len(pos), strings.TrimSpace(name+" "+cmd.args))
 	}
@@ -223,8 +214,6 @@ func parseClientArgs(name string, cmd cliCommand, args []string, env cliEnv) (*c
 
 func argCount(cmd cliCommand) string {
 	switch {
-	case cmd.maxArgs < 0:
-		return fmt.Sprintf("at least %d argument(s)", cmd.minArgs)
 	case cmd.minArgs == cmd.maxArgs:
 		return fmt.Sprintf("%d argument(s)", cmd.minArgs)
 	default:
