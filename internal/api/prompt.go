@@ -1,11 +1,13 @@
 package api
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"agyd/internal/acp"
@@ -91,9 +93,23 @@ func (s *server) prompt(w http.ResponseWriter, r *http.Request, id string) error
 		return err
 	}
 	setConversationHeaders(w, info)
+	sse := strings.Contains(r.Header.Get("Accept"), "text/event-stream")
+	stream := "json"
+	if sse {
+		stream = "sse"
+	}
+	start := time.Now()
+	set := conversation.SettingsOf(info)
+	s.log.InfoContext(r.Context(), "prompt started",
+		"conversationId", info.SessionID,
+		"model", set.Model,
+		"thinkingLevel", set.ThinkingLevel,
+		"mode", set.Mode,
+		"stream", stream,
+	)
 	blocks := []acp.ContentBlock{{Type: "text", Text: req.Prompt}}
-	if strings.Contains(r.Header.Get("Accept"), "text/event-stream") {
-		return s.streamPromptSSE(w, r, info, blocks)
+	if sse {
+		return s.streamPromptSSE(w, r, info, blocks, start)
 	}
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{}) // buffered prompt turns can exceed the default 30s WriteTimeout
@@ -103,10 +119,11 @@ func (s *server) prompt(w http.ResponseWriter, r *http.Request, id string) error
 		return err
 	}
 	writeJSON(w, http.StatusOK, newPromptResponse(info, res))
+	s.logPromptFinished(r.Context(), info.SessionID, "json", res.StopReason, start, len(res.Updates), res.Usage)
 	return nil
 }
 
-func (s *server) streamPromptSSE(w http.ResponseWriter, r *http.Request, info acp.SessionInfo, blocks []acp.ContentBlock) error {
+func (s *server) streamPromptSSE(w http.ResponseWriter, r *http.Request, info acp.SessionInfo, blocks []acp.ContentBlock, start time.Time) error {
 	rc := http.NewResponseController(w)
 	_ = rc.SetWriteDeadline(time.Time{}) // SSE streams can outlive the default HTTP WriteTimeout
 
@@ -133,7 +150,9 @@ func (s *server) streamPromptSSE(w http.ResponseWriter, r *http.Request, info ac
 		_ = rc.SetWriteDeadline(time.Time{})
 	}
 
+	var updateCount atomic.Int64
 	res, err := s.svc.Prompt(r.Context(), info.SessionID, blocks, func(rawUpdate []byte) {
+		updateCount.Add(1)
 		sendEvent("session_update", rawUpdate)
 	})
 	if err != nil {
@@ -151,7 +170,37 @@ func (s *server) streamPromptSSE(w http.ResponseWriter, r *http.Request, info ac
 
 	doneBytes, _ := json.Marshal(newPromptDoneResponse(info, res))
 	sendEvent("prompt_done", doneBytes)
+	s.logPromptFinished(r.Context(), info.SessionID, "sse", res.StopReason, start, int(updateCount.Load()), res.Usage)
 	return nil
+}
+
+// usageTotalTokens extracts a positive totalTokens count from raw ACP usage JSON.
+func usageTotalTokens(raw json.RawMessage) (int, bool) {
+	if len(raw) == 0 {
+		return 0, false
+	}
+	var u struct {
+		TotalTokens int `json:"totalTokens"`
+	}
+	if err := json.Unmarshal(raw, &u); err != nil || u.TotalTokens <= 0 {
+		return 0, false
+	}
+	return u.TotalTokens, true
+}
+
+func (s *server) logPromptFinished(ctx context.Context, conversationID, stream, stopReason string, start time.Time, updates int, usage json.RawMessage) {
+	attrs := make([]any, 0, 12)
+	attrs = append(attrs,
+		"conversationId", conversationID,
+		"stream", stream,
+		"stopReason", stopReason,
+		"durationMs", time.Since(start).Milliseconds(),
+		"updates", updates,
+	)
+	if total, ok := usageTotalTokens(usage); ok {
+		attrs = append(attrs, "totalTokens", total)
+	}
+	s.log.InfoContext(ctx, "prompt finished", attrs...)
 }
 
 // handleCancelCurrent cancels the current conversation's turn. It never

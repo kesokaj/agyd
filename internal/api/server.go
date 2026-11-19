@@ -134,7 +134,7 @@ func NewHandler(log *slog.Logger, svc acp.Service, mgr *conversation.Manager, cf
 		})
 	})))
 
-	return s.recoverMiddleware(mux)
+	return s.accessLogMiddleware(s.recoverMiddleware(mux))
 }
 
 func (s *server) recoverMiddleware(next http.Handler) http.Handler {
