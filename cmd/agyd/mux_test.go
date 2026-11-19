@@ -1,11 +1,13 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"agyd/internal/conversation"
@@ -207,6 +209,68 @@ func TestMuxWebRoutesMethodNotAllowed(t *testing.T) {
 			}
 			if got := w.Header().Get("Allow"); got != tc.allow {
 				t.Errorf("%s %s Allow = %q, want %q", tc.method, tc.path, got, tc.allow)
+			}
+		}
+	})
+}
+
+func TestMuxDocsRouteLoggedAtDebug(t *testing.T) {
+	var buf bytes.Buffer
+	var lv slog.LevelVar
+	mux := newMux(newLogger(&buf, &lv), nil, conversation.New(conversation.Options{}), "/tmp")
+
+	doGet := func(path string) {
+		t.Helper()
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		req.Host = "localhost:8080"
+		w := httptest.NewRecorder()
+		mux.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s = %d, want 200", path, w.Code)
+		}
+	}
+
+	parseLogs := func(raw string) []map[string]any {
+		t.Helper()
+		var out []map[string]any
+		for _, line := range strings.Split(strings.TrimSpace(raw), "\n") {
+			if line == "" {
+				continue
+			}
+			var rec map[string]any
+			if err := json.Unmarshal([]byte(line), &rec); err != nil {
+				t.Fatalf("unmarshal log line %q: %v", line, err)
+			}
+			out = append(out, rec)
+		}
+		return out
+	}
+
+	quietPaths := []string{"/docs", "/openapi.json", "/healthz"}
+
+	t.Run("INFO emits zero access logs for quiet web and health routes", func(t *testing.T) {
+		lv.Set(slog.LevelInfo)
+		buf.Reset()
+		for _, path := range quietPaths {
+			doGet(path)
+		}
+		if recs := parseLogs(buf.String()); len(recs) != 0 {
+			t.Fatalf("INFO emitted %d logs for %v, want 0: %v", len(recs), quietPaths, recs)
+		}
+	})
+
+	t.Run("DEBUG logs /docs, /openapi.json, and /healthz with original path", func(t *testing.T) {
+		lv.Set(slog.LevelDebug)
+		for _, path := range quietPaths {
+			buf.Reset()
+			doGet(path)
+			recs := parseLogs(buf.String())
+			if len(recs) != 1 {
+				t.Fatalf("GET %s emitted %d DEBUG logs, want 1: %v", path, len(recs), recs)
+			}
+			rec := recs[0]
+			if rec["severity"] != "DEBUG" || rec["message"] != "http request" || rec["method"] != http.MethodGet || rec["path"] != path || rec["status"] != float64(http.StatusOK) {
+				t.Errorf("GET %s log = %v, want DEBUG http request GET %s 200", path, rec, path)
 			}
 		}
 	})

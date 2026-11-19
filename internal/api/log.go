@@ -46,6 +46,10 @@ func isQuietRoute(path string) bool {
 func (s *server) accessLogMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		// Capture request method and path before downstream handlers (e.g. /docs
+		// rewriting r.URL.Path to /docs.html) can mutate the request in place.
+		method := r.Method
+		path := r.URL.Path
 		sw := &statusWriter{ResponseWriter: w}
 		next.ServeHTTP(sw, r)
 
@@ -55,14 +59,14 @@ func (s *server) accessLogMiddleware(next http.Handler) http.Handler {
 			status = http.StatusOK
 		}
 		level := slog.LevelInfo
-		if isQuietRoute(r.URL.Path) && !canceled && status < http.StatusBadRequest {
+		if isQuietRoute(path) && !canceled && status < http.StatusBadRequest {
 			level = slog.LevelDebug
 		}
 
 		attrs := make([]any, 0, 12)
 		attrs = append(attrs,
-			"method", r.Method,
-			"path", r.URL.Path,
+			"method", method,
+			"path", path,
 			"status", status,
 			"durationMs", time.Since(start).Milliseconds(),
 		)

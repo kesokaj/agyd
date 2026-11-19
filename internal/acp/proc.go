@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -253,11 +254,88 @@ func (p *folderProc) readLoop(r io.Reader, cmd *exec.Cmd, stderrDone <-chan stru
 	}
 }
 
+const maxStderrLogBytes = 4096
+
 func (p *folderProc) drainStderr(r io.Reader, done chan<- struct{}) {
 	defer close(done)
-	scanner := bufio.NewScanner(r)
-	for scanner.Scan() {
-		p.client.log.Debug("acp stderr", "dir", p.dir, "line", scanner.Text())
+	br := bufio.NewReaderSize(r, maxStderrLogBytes)
+	var buf []byte
+	for {
+		if !p.client.log.Enabled(context.Background(), slog.LevelDebug) {
+			if discardStderrLine(br) {
+				return
+			}
+			continue
+		}
+		line, truncated, emit, eof := readStderrLine(br, &buf)
+		if emit {
+			if truncated {
+				p.client.log.Debug("acp stderr", "dir", p.dir, "line", line, "truncated", true)
+			} else {
+				p.client.log.Debug("acp stderr", "dir", p.dir, "line", line)
+			}
+		}
+		if eof {
+			return
+		}
+	}
+}
+
+// discardStderrLine drains one newline-delimited line without allocating a line
+// buffer and reports whether the underlying reader reached EOF or an error.
+func discardStderrLine(br *bufio.Reader) bool {
+	for {
+		_, err := br.ReadSlice('\n')
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		return err != nil
+	}
+}
+
+// readStderrLine drains one newline-delimited line from br using ReadSlice so
+// oversized lines never abort draining or deadlock the child's stderr pipe,
+// capping the returned line at maxStderrLogBytes bytes.
+func readStderrLine(br *bufio.Reader, buf *[]byte) (line string, truncated, emit, done bool) {
+	b := (*buf)[:0]
+	var sawAny, dropped bool
+	for {
+		frag, err := br.ReadSlice('\n')
+		if len(frag) > 0 {
+			sawAny = true
+		}
+		chunk := frag
+		if err == nil && len(chunk) > 0 && chunk[len(chunk)-1] == '\n' {
+			chunk = chunk[:len(chunk)-1]
+		}
+		if len(chunk) > 0 && !dropped {
+			// Retain up to maxStderrLogBytes+1 bytes so a single trailing '\r'
+			// on a maxStderrLogBytes line can be stripped without false truncation.
+			rem := maxStderrLogBytes + 1 - len(b)
+			if len(chunk) > rem {
+				b = append(b, chunk[:rem]...)
+				dropped = true
+			} else {
+				b = append(b, chunk...)
+			}
+		}
+		if errors.Is(err, bufio.ErrBufferFull) {
+			continue
+		}
+		*buf = b
+		if !sawAny {
+			return "", false, false, err != nil
+		}
+		if !dropped && len(b) > 0 && b[len(b)-1] == '\r' {
+			b = b[:len(b)-1]
+		}
+		if dropped || len(b) > maxStderrLogBytes {
+			truncated = true
+			if len(b) > maxStderrLogBytes {
+				b = b[:maxStderrLogBytes]
+			}
+		}
+		return string(b), truncated, true, err != nil
 	}
 }
 
