@@ -15,6 +15,7 @@
 
 ## Backlog
 
+- 2026-11-19 (reviewer v0.2.0 r1) Elicit and fill `PRD.md` sections (`Problem`, `Users`, `Must`, `Non-goals`) with operator approval via `/fyr-requirements` (deferred past v0.2.0 per operator A4 / ADR-008).
 - 2026-11-19 (security phase-4b #2) optional configurable cap on concurrent per-folder `agy acp` child processes (declined for minimal Phase 4b: single-user local loopback tool).
 - 2026-11-18 (permission probe) agy reported `rm -rf rmme.txt` as run while the file stayed (its own deny rule); agyd cannot see that refusal. Consider surfacing tool_call status from `session/update` in the CLI.
 - 2026-11-18 (security permission-log #2) rate-limit or dedupe `unsupported agent request` lines per method (rebutted for now: agy is the operator's local child).
