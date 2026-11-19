@@ -73,7 +73,7 @@ func (f *fakeAgyd) serve(w http.ResponseWriter, r *http.Request) {
 	switch path := r.URL.Path; {
 	case path == "/healthz":
 		reply(http.StatusOK, `{"service":"agyd"}`+"\n")
-	case none && path == "/v1/current":
+	case none && (path == "/v1/current" || path == "/v1/clear"):
 		reply(http.StatusNotFound, noCurrent)
 	case strings.HasSuffix(path, "/prompt") && strings.Contains(r.Header.Get("Accept"), "text/event-stream"):
 		if sse != nil {
@@ -88,7 +88,7 @@ func (f *fakeAgyd) serve(w http.ResponseWriter, r *http.Request) {
 		reply(http.StatusOK, promptBody)
 	case path == "/v1/conversations" && r.Method == http.MethodGet:
 		reply(http.StatusOK, listBody)
-	case path == "/v1/conversations":
+	case path == "/v1/conversations" || path == "/v1/clear" || strings.HasSuffix(path, "/clear"):
 		reply(http.StatusCreated, convBody)
 	case path == "/v1/models":
 		reply(http.StatusOK, modelsBody)
@@ -160,6 +160,8 @@ func TestCLICommandsHitTheirEndpoints(t *testing.T) {
 		{[]string{"ask", "--conversation", "c/2", "hi"}, "POST", "/v1/conversations/c%2F2/prompt", "text/event-stream", `{"prompt":"hi"}`, nil},
 		{[]string{"new", "--model", "claude-sonnet-5-5", "--thinking", "high"}, "POST", "/v1/conversations", "application/json",
 			`{"cwd":"/work/here","model":"claude-sonnet-5-5","thinkingLevel":"high"}`, []string{"conversation  c1", "model         gemini-4-carbon"}},
+		{[]string{"clear"}, "POST", "/v1/clear", "application/json", "", []string{"conversation  c1", "cwd           /w"}},
+		{[]string{"clear", "c/2"}, "POST", "/v1/conversations/c%2F2/clear", "application/json", "", []string{"conversation  c1", "cwd           /w"}},
 		{[]string{"list"}, "GET", "/v1/conversations", "application/json", "", []string{"* c1", "  hist_1", "old one"}},
 		{[]string{"use", "hist_1"}, "POST", "/v1/conversations/hist_1/use", "application/json", "", []string{"conversation  c1"}},
 		{[]string{"current"}, "GET", "/v1/current", "application/json", "", []string{"cwd           /w"}},
@@ -210,6 +212,7 @@ func TestCLIJSONPrintsTheRawResponse(t *testing.T) {
 		{[]string{"defaults", "--json"}, "application/json", defaultsBody},
 		{[]string{"ask", "hi", "--json"}, "application/json", promptBody}, // flag after the prompt; buffered, not SSE
 		{[]string{"new", "--json"}, "application/json", convBody},
+		{[]string{"clear", "--json"}, "application/json", convBody},
 	}
 	for _, tt := range tests {
 		t.Run(strings.Join(tt.args, " "), func(t *testing.T) {
@@ -253,6 +256,11 @@ func TestCLIErrorsShowInfoLineAndEnvelope(t *testing.T) {
 	}
 	if stdout.String() != noCurrent {
 		t.Errorf("--json stdout = %q, want the error envelope", stdout)
+	}
+
+	env, stdout, stderr = testCLIEnv(t, fakeAddr(f), "", nil)
+	if code := runCLI(t, t.Context(), env, "clear"); code != 1 || stderr.String() != want || stdout.Len() != 0 {
+		t.Errorf("clear with no current: exit=%d stdout=%q stderr=%q", code, stdout, stderr)
 	}
 }
 
@@ -323,6 +331,10 @@ func TestCLIUsageErrorsSendNothing(t *testing.T) {
 	for _, args := range [][]string{
 		{"use"},
 		{"use", "a", "b"},
+		{"clear", "a", "b"},
+		{"clear", "   "},
+		{"clear", "."},
+		{"clear", ".."},
 		{"model"},
 		{"ask", "--bogus", "hi"},
 		{"current", "extra"},

@@ -7,13 +7,12 @@
 
 ## Now
 
-`PLAN-folder-isolation` (`ADR-006`; Phases 0-3 and 4b complete, Phase 4a superseded by D7, `BUG-002` graduated). Active: **Phase 5: /clear** — new conversation with same folder and settings, keeping the old one in history.
+`PLAN-folder-isolation` (`ADR-006`; Phases 0-3, 4b, and 5 complete, Phase 4a superseded by D7, `BUG-002` graduated). Active: **Phase 6: 405 on web routes** — web routes join the method table with `405` and `Allow: GET, HEAD`.
 
-- [ ] `POST /v1/clear` and `POST /v1/conversations/{id}/clear`: a new conversation with the same folder and settings, which becomes current. The old one stays in history. Plus `agyd clear` in the CLI.
-- [x] If S4 shows agy clears natively, forward `/clear` instead and keep the id. (not applicable 2026-11-18: S4 = no; `ADR-006`)
+- [ ] Web routes join the method table. `POST /docs` → 405 with `Allow: GET, HEAD`. Test first.
 - [ ] Checkpoint: change record, commit and push, handoff.
 
-Remaining phases: P6 405 on web routes.
+Remaining phases: none (final phase of `PLAN-folder-isolation`).
 
 ## Next
 

@@ -80,6 +80,10 @@ var cliCommands = map[string]cliCommand{
 		summary: "create a conversation in this folder and make it current",
 		flags:   settingFlags(true), run: runNew,
 	},
+	"clear": {
+		args: "[<id>]", summary: "start a fresh conversation with the same folder and settings (keeps old in history)",
+		maxArgs: 1, run: runClear,
+	},
 	"list":    {summary: "list conversations (live and agy history; * marks current)", run: runList},
 	"use":     {args: "<id>", summary: "make a conversation current (resumes it if needed)", minArgs: 1, maxArgs: 1, run: runUse},
 	"current": {summary: "show the current conversation", run: runCurrent},
@@ -94,7 +98,7 @@ var cliCommands = map[string]cliCommand{
 	},
 }
 
-var cliOrder = []string{"ask", "new", "list", "use", "current", "model", "models", "defaults"}
+var cliOrder = []string{"ask", "new", "clear", "list", "use", "current", "model", "models", "defaults"}
 
 // dispatch picks the serve path or a client command from the arguments.
 // Bare `agyd`, `agyd serve ...` and `agyd -flag ...` serve.

@@ -55,7 +55,7 @@ type Manager struct {
 	workspace       string
 	startupDefaults Settings
 
-	opMu   sync.Mutex // serializes pointer and settings changes (create, use, resume, update, delete)
+	opMu   sync.Mutex // serializes pointer and settings changes (create, clear, use, resume, update, delete)
 	saveMu sync.Mutex // serializes state.json snapshots + writes (lock order: opMu -> saveMu -> mu)
 
 	mu            sync.Mutex // guards the fields below
@@ -173,7 +173,10 @@ func (m *Manager) Create(ctx context.Context, req CreateRequest) (acp.SessionInf
 }
 
 func (m *Manager) create(ctx context.Context, req CreateRequest) (acp.SessionInfo, error) {
-	cwd := req.Cwd
+	return m.startSession(ctx, req.Cwd, m.Defaults(), req.Settings, req.NoUse)
+}
+
+func (m *Manager) startSession(ctx context.Context, cwd string, lenient, strict Settings, noUse bool) (acp.SessionInfo, error) {
 	if cwd == "" {
 		cwd = m.workspace
 	}
@@ -181,20 +184,53 @@ func (m *Manager) create(ctx context.Context, req CreateRequest) (acp.SessionInf
 	if err != nil {
 		return acp.SessionInfo{}, err
 	}
-	info = m.applyLenient(ctx, info, m.Defaults())
-	if info, err = m.applyStrict(ctx, info, req.Settings); err != nil {
+	info = m.applyLenient(ctx, info, lenient)
+	if info, err = m.applyStrict(ctx, info, strict); err != nil {
 		if cerr := m.agent.CloseSession(context.WithoutCancel(ctx), info.SessionID); cerr != nil {
 			m.log.Warn("closing the conversation a failed create left behind", "conversationId", info.SessionID, "err", cerr)
 		}
 		return acp.SessionInfo{}, err
 	}
 	m.remember(info.SessionID, memo{cwd: info.Cwd, settings: SettingsOf(info)})
-	if !req.NoUse {
+	if !noUse {
 		m.setCurrent(info.SessionID)
 	} else {
 		m.persistState()
 	}
 	return info, nil
+}
+
+// Clear starts a fresh conversation with the same folder and settings as id
+// ("" = current), makes it current, and leaves the old conversation intact in
+// history. With id == "" and no current conversation it returns ErrNoCurrent.
+func (m *Manager) Clear(ctx context.Context, id string) (acp.SessionInfo, error) {
+	m.opMu.Lock()
+	defer m.opMu.Unlock()
+	target := id
+	if target == "" {
+		target = m.CurrentID()
+		if target == "" {
+			return acp.SessionInfo{}, ErrNoCurrent
+		}
+	}
+	cwd, srcSettings, err := m.clearSource(ctx, target)
+	if err != nil {
+		return acp.SessionInfo{}, err
+	}
+	return m.startSession(ctx, cwd, m.Defaults().overlay(srcSettings), Settings{}, false)
+}
+
+func (m *Manager) clearSource(ctx context.Context, id string) (string, Settings, error) {
+	if info, err := m.agent.GetSession(id); err == nil {
+		set := SettingsOf(info)
+		m.remember(id, memo{cwd: info.Cwd, settings: set})
+		return info.Cwd, set, nil
+	}
+	mem, _, err := m.recallOrHistory(ctx, id)
+	if err != nil {
+		return "", Settings{}, err
+	}
+	return mem.cwd, mem.settings, nil
 }
 
 // Use makes id current, resuming it (and re-applying its remembered settings,
@@ -212,13 +248,9 @@ func (m *Manager) use(ctx context.Context, id string) (acp.SessionInfo, error) {
 		m.setCurrent(id)
 		return info, nil
 	}
-	mem, known := m.recall(id)
-	if mem.cwd == "" {
-		cwd, err := m.historyCwd(ctx, id)
-		if err != nil {
-			return acp.SessionInfo{}, err
-		}
-		mem.cwd = cwd
+	mem, known, err := m.recallOrHistory(ctx, id)
+	if err != nil {
+		return acp.SessionInfo{}, err
 	}
 	info, err := m.agent.ResumeSession(ctx, id, mem.cwd)
 	if err != nil {
@@ -235,6 +267,18 @@ func (m *Manager) use(ctx context.Context, id string) (acp.SessionInfo, error) {
 	m.remember(id, memo{cwd: info.Cwd, settings: SettingsOf(info)})
 	m.setCurrent(id)
 	return info, nil
+}
+
+func (m *Manager) recallOrHistory(ctx context.Context, id string) (memo, bool, error) {
+	mem, known := m.recall(id)
+	if mem.cwd == "" {
+		cwd, err := m.historyCwd(ctx, id)
+		if err != nil {
+			return memo{}, false, err
+		}
+		mem.cwd = cwd
+	}
+	return mem, known, nil
 }
 
 // historyCwd finds id's working directory in agy's session/list, falling back

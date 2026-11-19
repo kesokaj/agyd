@@ -47,6 +47,7 @@ agyd always has a **current conversation**. `agyd ask` and `POST /v1/prompt` tal
 |---|---|---|
 | Ask something | `agyd ask "..."` | `POST /v1/prompt` |
 | Start fresh in this folder | `agyd new [--model M] [--thinking T]` | `POST /v1/conversations` |
+| Clear context (same folder & settings) | `agyd clear [<id>]` | `POST /v1/clear`, `POST /v1/conversations/{id}/clear` |
 | See all conversations | `agyd list` (`*` marks current) | `GET /v1/conversations` |
 | Switch to another one | `agyd use <id>` | `POST /v1/conversations/{id}/use` |
 | See the current one | `agyd current` | `GET /v1/current` |
@@ -133,6 +134,7 @@ curl -X DELETE "http://127.0.0.1:8080/v1/conversations/$ID"
 | `PATCH` | `/v1/current` | Change its `model`, `thinkingLevel` or `mode` |
 | `POST` | `/v1/prompt` | Run a turn on the current conversation (creates one if needed): JSON, or SSE with `Accept: text/event-stream` |
 | `POST` | `/v1/cancel` | Cancel the current conversation's running turn |
+| `POST` | `/v1/clear` | Start a new current conversation with the current one's folder and settings (old stays in history) |
 | `POST` | `/v1/conversations` | Create one (`cwd`, `model`, `thinkingLevel`, `mode`, `use`; all optional). Becomes current unless `"use": false` |
 | `GET` | `/v1/conversations` | List live conversations and agy's history, newest first (`?cwd=` filters) |
 | `GET` | `/v1/conversations/{id}` | One conversation |
@@ -141,6 +143,7 @@ curl -X DELETE "http://127.0.0.1:8080/v1/conversations/$ID"
 | `POST` | `/v1/conversations/{id}/prompt` | Run a turn on that conversation |
 | `POST` | `/v1/conversations/{id}/cancel` | Cancel its running turn |
 | `POST` | `/v1/conversations/{id}/use` | Make it current (resumes it if it is not live) |
+| `POST` | `/v1/conversations/{id}/clear` | Start a new current conversation with `{id}`'s folder and settings (old stays in history) |
 | `GET` | `/v1/models` | Models, thinking levels and modes agy offers |
 | `GET` | `/v1/defaults` | Defaults for new conversations |
 | `PUT` | `/v1/defaults` | Change the defaults and save them to `state.json` |

@@ -156,3 +156,23 @@ func (s *server) handleGetCurrent(w http.ResponseWriter, r *http.Request) error 
 	writeJSON(w, http.StatusOK, s.mgr.View(info))
 	return nil
 }
+
+func (s *server) handleClearCurrent(w http.ResponseWriter, r *http.Request) error {
+	return s.clear(w, r, "")
+}
+
+func (s *server) handleClearConversation(w http.ResponseWriter, r *http.Request) error {
+	return s.clear(w, r, r.PathValue("conversationId"))
+}
+
+// clear starts a fresh conversation with the target's folder and settings,
+// switches the current pointer to it, and leaves the old one intact in history.
+func (s *server) clear(w http.ResponseWriter, r *http.Request, id string) error {
+	info, err := s.mgr.Clear(r.Context(), id)
+	if err != nil {
+		return err
+	}
+	setConversationHeaders(w, info)
+	writeJSON(w, http.StatusCreated, s.mgr.View(info))
+	return nil
+}

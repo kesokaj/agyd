@@ -362,3 +362,85 @@ func TestServerPerFolderIsolationAndStateRouting(t *testing.T) {
 		t.Errorf("dirA PID %d still alive after last dirA conversation closed (kill(0) = %v), want ESRCH", inOther.PID, err)
 	}
 }
+
+func TestServerClearReusesFolderProcAndPreservesSettings(t *testing.T) {
+	tmp := realTempDir(t)
+	home := filepath.Join(tmp, "home")
+	stateDir := filepath.Join(tmp, "state")
+	dirA := filepath.Join(tmp, "dirA")
+	dirB := filepath.Join(tmp, "dirB")
+	for _, d := range []string{home, stateDir, dirA, dirB} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	storePath := filepath.Join(tmp, "iso-store.json")
+	spawnPath := filepath.Join(tmp, "iso-spawns.jsonl")
+
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := startAgydProcess(t, dirA, map[string]string{
+		"HOME":                 home,
+		"AGYD_STATE_DIR":       stateDir,
+		"AGYD_HOST":            "127.0.0.1",
+		"AGYD_PORT":            strconv.Itoa(freeLoopbackPort(t)),
+		"AGYD_WORKSPACE":       dirA,
+		"AGYD_AGY":             exe,
+		"AGYD_ACP_ARGS":        "-test.run=^TestHelperIsolationACP$",
+		"AGYD_TEST_ISO_ACP":    "1",
+		"AGYD_TEST_ISO_STORE":  storePath,
+		"AGYD_TEST_ISO_SPAWNS": spawnPath,
+	})
+	defer srv.stopSIGTERM(t)
+
+	// Create a conversation in dirB with non-default settings and verify its process.
+	orig := httpJSON(t, http.MethodPost, srv.base+"/v1/conversations",
+		fmt.Sprintf(`{"cwd":%q,"model":"claude-sonnet-5-5","thinkingLevel":"high","mode":"plan"}`, dirB), http.StatusCreated)
+	origID := orig["conversationId"].(string)
+	inOrig := promptInspect(t, srv.base, origID)
+	spawnsBefore := len(readIsoSpawns(t, spawnPath))
+
+	// POST /v1/clear creates a fresh conversation on the same dirB process with the same settings.
+	cleared := httpJSON(t, http.MethodPost, srv.base+"/v1/clear", "", http.StatusCreated)
+	clearedID := cleared["conversationId"].(string)
+	if clearedID == origID || cleared["cwd"] != dirB || cleared["model"] != "claude-sonnet-5-5" ||
+		cleared["thinkingLevel"] != "high" || cleared["mode"] != "plan" || cleared["current"] != true {
+		t.Fatalf("cleared = %+v, want new id in %s with claude-sonnet-5-5/high/plan", cleared, dirB)
+	}
+	if spawnsAfter := len(readIsoSpawns(t, spawnPath)); spawnsAfter != spawnsBefore {
+		t.Errorf("clear spawned extra process: spawns %d -> %d", spawnsBefore, spawnsAfter)
+	}
+	inCleared := promptInspect(t, srv.base, "")
+	if inCleared.PID != inOrig.PID || inCleared.CmdDir != dirB || !slices.Equal(inCleared.Roots, []string{dirB}) {
+		t.Fatalf("cleared inspect = %+v, want same PID=%d and roots=[%s]", inCleared, inOrig.PID, dirB)
+	}
+
+	// Old conversation remains reachable and intact in state.json alongside the new current one.
+	rawState, err := os.ReadFile(filepath.Join(stateDir, "state.json"))
+	if err != nil {
+		t.Fatalf("ReadFile(state.json): %v", err)
+	}
+	var st struct {
+		CurrentConversationID string `json:"currentConversationId"`
+		Conversations         map[string]struct {
+			Cwd           string `json:"cwd"`
+			Model         string `json:"model"`
+			ThinkingLevel string `json:"thinkingLevel"`
+			Mode          string `json:"mode"`
+		} `json:"conversations"`
+	}
+	if err := json.Unmarshal(rawState, &st); err != nil {
+		t.Fatalf("unmarshal state.json: %v", err)
+	}
+	if st.CurrentConversationID != clearedID {
+		t.Errorf("state.CurrentConversationID = %q, want %q", st.CurrentConversationID, clearedID)
+	}
+	for _, id := range []string{origID, clearedID} {
+		rec := st.Conversations[id]
+		if rec.Cwd != dirB || rec.Model != "claude-sonnet-5-5" || rec.ThinkingLevel != "high" || rec.Mode != "plan" {
+			t.Errorf("state.Conversations[%q] = %+v, want %s claude-sonnet-5-5/high/plan", id, rec, dirB)
+		}
+	}
+}

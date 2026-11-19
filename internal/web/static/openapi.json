@@ -326,6 +326,59 @@
         }
       }
     },
+    "/v1/clear": {
+      "post": {
+        "summary": "Clear the current conversation",
+        "tags": [
+          "current"
+        ],
+        "description": "Creates a new conversation in the same folder with the same model, thinkingLevel, and mode as the current conversation, makes it current, and leaves the old conversation intact in agy history. 404 NO_CURRENT_CONVERSATION when none is set.",
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
     "/v1/conversations": {
       "get": {
         "summary": "List conversations",
@@ -802,6 +855,69 @@
           },
           "400": {
             "$ref": "#/components/responses/BadRequest"
+          },
+          "403": {
+            "$ref": "#/components/responses/Forbidden"
+          },
+          "404": {
+            "$ref": "#/components/responses/NotFound"
+          },
+          "500": {
+            "$ref": "#/components/responses/Internal"
+          },
+          "502": {
+            "$ref": "#/components/responses/BadGateway"
+          }
+        }
+      }
+    },
+    "/v1/conversations/{conversationId}/clear": {
+      "post": {
+        "summary": "Clear a conversation",
+        "tags": [
+          "conversations"
+        ],
+        "description": "Creates a new conversation in the same folder with the same model, thinkingLevel, and mode as the named conversation (live or in agy history), makes it current, and leaves the old conversation intact in agy history.",
+        "parameters": [
+          {
+            "name": "conversationId",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "Created",
+            "headers": {
+              "Agyd-Conversation": {
+                "$ref": "#/components/headers/AgydConversation"
+              },
+              "Agyd-Model": {
+                "$ref": "#/components/headers/AgydModel"
+              },
+              "Agyd-Thinking-Level": {
+                "$ref": "#/components/headers/AgydThinkingLevel"
+              },
+              "Agyd-Mode": {
+                "$ref": "#/components/headers/AgydMode"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Conversation"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          },
+          "401": {
+            "$ref": "#/components/responses/Unauthorized"
           },
           "403": {
             "$ref": "#/components/responses/Forbidden"

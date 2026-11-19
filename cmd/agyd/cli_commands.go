@@ -68,6 +68,19 @@ func runNew(ctx context.Context, c *cli, o *cliOpts, _ []string) error {
 	return nil
 }
 
+// runClear: POST /v1/clear, or POST /v1/conversations/{id}/clear when an id is given.
+func runClear(ctx context.Context, c *cli, _ *cliOpts, args []string) error {
+	path := "/v1/clear"
+	if len(args) == 1 {
+		id := args[0]
+		if strings.TrimSpace(id) == "" || id == "." || id == ".." {
+			return usageErr("invalid conversation id; usage: agyd clear [<id>]")
+		}
+		path = "/v1/conversations/" + url.PathEscape(id) + "/clear"
+	}
+	return c.conversationCall(ctx, http.MethodPost, path, nil)
+}
+
 // runList: GET /v1/conversations.
 func runList(ctx context.Context, c *cli, _ *cliOpts, _ []string) error {
 	var res struct {
