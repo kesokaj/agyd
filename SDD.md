@@ -27,13 +27,13 @@ Every package has one responsibility across the HTTP/SSE gateway, per-folder ACP
 
 | ID | Component | Responsibility | Satisfies |
 |---|---|---|---|
-| M1 | `cmd/agyd` (serve) | Entry point and first-word dispatch (serve vs control-plane CLI), flag and `AGYD_*` env config with `-log-level` and `-state-dir` support (`serveconfig.go`), `8080` -> `3000` listen fallback (`listen.go`), Host allowlist for a non-loopback bind, startup conversation and model picker (`startup.go`, `picker.go`), mux composition wrapped in `api.Guard`, dynamic `log/slog` JSON logger (`slog.LevelVar`), graceful `SIGINT`/`SIGTERM` shutdown | — |
-| M2 | `internal/acp` | Per-folder `agy acp` process pool (`exec.Cmd.Dir` = folder, `os.SameFile` deduplication, pinned binary path, synchronous reap when last conversation closes), ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, subprocess lifecycle logging (`started`, `stopped`, `exited unexpectedly` at `WARN`), `acp stderr` logging at `DEBUG`, `session/set_config_option`, `session/list`, `session/resume`, process-scoped `session/update` fan-out, `session/request_permission` policy | — |
-| M3 | `internal/api` | REST and SSE handlers on the Manager, middleware pipeline (`accessLogMiddleware -> recoverMiddleware -> mux`, `statusWriter.Unwrap()` preserving `http.ResponseController` flushing for SSE), quiet-route `DEBUG` demotion, metadata-only prompt turn logs (`started`, `finished`), strict verbatim ACP v1 prompt envelope (buffered JSON always serializes `updates` array; SSE omits `updates` on `prompt_done`), route table, `Agyd-*` response headers, Host validation and `http.CrossOriginProtection` (`api.Guard`), AIP-193 errors | — |
-| M4 | `internal/web` | Embedded OpenAPI 3.1 spec (`openapi.json`), vendored Swagger UI, root redirect, CSP/nosniff headers | — |
-| M5 | `internal/config` | Flat `state.json` store (`currentConversationId`, `defaults`, `conversations`), `AGYD_STATE_DIR` resolution, safe non-blocking regular file reading (capped at 4 MiB), `ValidSettingValue`, atomic 0600 writes | — |
-| M6 | `internal/conversation` | `Manager`: the one owner of current pointer, defaults, per-conversation memo settings, and full `state.json` snapshots under `saveMu` (lock order: `opMu -> saveMu -> mu`); startup flag/env defaults override without clobbering disk; resolve-or-create, clear (fresh conversation with same folder and settings), use/resume, list merge with `agy` history, conversation lifecycle logging (`created`, `cleared`, `switched`, `updated`, `deleted`, `defaults updated`) | — |
-| M7 | `cmd/agyd` (control-plane CLI) | `current|list|new|use|clear|model|models|defaults|help`: thin stdlib HTTP control plane backed 1:1 by `/v1/*` (no `ask` subcommand, no SSE client), terminal control-character sanitization (`sanitizeTerminal`) stripping ANSI/C0/C1/Bidi escapes on human output, base URL from `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe of `8080` then `3000`, readable text/table output by default, stderr `Agyd-*` context line, `--json` for raw API JSON in scripts | — |
+| M1 | `cmd/agyd` (serve) | Entry point and first-word dispatch (serve vs control-plane CLI), flag and `AGYD_*` env config with `-log-level` and `-state-dir` support (`serveconfig.go`), `8080` -> `3000` listen fallback (`listen.go`), Host allowlist for a non-loopback bind, startup conversation and model picker (`startup.go`, `picker.go`), mux composition wrapped in `api.Guard`, dynamic `log/slog` JSON logger (`slog.LevelVar`), graceful `SIGINT`/`SIGTERM` shutdown | R1, R2, R3, R4, R7, R8, R9, R10, S2 |
+| M2 | `internal/acp` | Per-folder `agy acp` process pool (`exec.Cmd.Dir` = folder, `os.SameFile` deduplication, pinned binary path, synchronous reap when last conversation closes), ACP v1 JSON-RPC 2.0 stdio transport, handshake, session lifecycle, subprocess lifecycle logging (`started`, `stopped`, `exited unexpectedly` at `WARN`), `acp stderr` logging at `DEBUG`, `session/set_config_option`, `session/list`, `session/resume`, process-scoped `session/update` fan-out, `session/request_permission` policy | R1, R4, R5, R6, R8 |
+| M3 | `internal/api` | REST and SSE handlers on the Manager, middleware pipeline (`accessLogMiddleware -> recoverMiddleware -> mux`, `statusWriter.Unwrap()` preserving `http.ResponseController` flushing for SSE), quiet-route `DEBUG` demotion, metadata-only prompt turn logs (`started`, `finished`), strict verbatim ACP v1 prompt envelope (buffered JSON always serializes `updates` array; SSE omits `updates` on `prompt_done`), route table, `Agyd-*` response headers, Host validation and `http.CrossOriginProtection` (`api.Guard`), AIP-193 errors | R3, R4, R6, R8, S1, S3 |
+| M4 | `internal/web` | Embedded OpenAPI 3.1 spec (`openapi.json`), vendored Swagger UI, root redirect, CSP/nosniff headers | R3, R10 |
+| M5 | `internal/config` | Flat `state.json` store (`currentConversationId`, `defaults`, `conversations`), `AGYD_STATE_DIR` resolution, safe non-blocking regular file reading (capped at 4 MiB), `ValidSettingValue`, atomic 0600 writes | R7 |
+| M6 | `internal/conversation` | `Manager`: the one owner of current pointer, defaults, per-conversation memo settings, and full `state.json` snapshots under `saveMu` (lock order: `opMu -> saveMu -> mu`); startup flag/env defaults override without clobbering disk; resolve-or-create, clear (fresh conversation with same folder and settings), use/resume, list merge with `agy` history, conversation lifecycle logging (`created`, `cleared`, `switched`, `updated`, `deleted`, `defaults updated`) | R4, R5, R7, R8, S1, S2 |
+| M7 | `cmd/agyd` (control-plane CLI) | `current|list|new|use|clear|model|models|defaults|help`: thin stdlib HTTP control plane backed 1:1 by `/v1/*` (no `ask` subcommand, no SSE client), terminal control-character sanitization (`sanitizeTerminal`) stripping ANSI/C0/C1/Bidi escapes on human output, base URL from `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe of `8080` then `3000`, readable text/table output by default, stderr `Agyd-*` context line, `--json` for raw API JSON in scripts | R9, S1, S4 |
 
 ## Route table
 
@@ -134,6 +134,7 @@ Architectural choices link to their ADR records (`fyr record get ADR-NNN`).
   - **Release installer:** distribute verified binaries via `install.sh` with HTTPS-only transport, strict tag/repo validation, mandatory SHA-256 checksum verification against `checksums.txt`, and atomic installation to `~/.local/bin`, alongside `go install github.com/kesokaj/agyd/cmd/agyd@latest`.
   - **Terminal hardening:** harden CLI human-readable output and startup picker with `sanitizeTerminal` (`cmd/agyd/sanitize.go`), stripping ANSI/VT100 escape sequences, C0/C1 control characters, and Unicode format/bidi runes while keeping `--json` raw.
   - **Ownership:** establish PRD owner `kesokaj`.
+- Approve root `PRD.md` (`# PRD — agyd`, `Status: approved`) capturing Problem, Users, measurable Goals (`G1`–`G4`), Non-goals, traced Must (`R1`–`R10`), Should (`S1`–`S4`), Could (`C1`–`C3`), Known limits, and Open questions, linked into `SDD.md` `Satisfies` and `Trace` — `ADR-009`.
 
 ## Cross-cutting
 
@@ -179,8 +180,21 @@ Operational failure modes and their mitigations center on host `agy` availabilit
 
 ## Trace
 
-Requirement-to-component mapping stays `—` until `PRD.md` requirements are approved via `/fyr-requirements`.
+Every approved requirement in `PRD.md` (`ADR-009`) maps to the components that implement and enforce it.
 
 | Requirement | Components |
 |---|---|
-| — | M1, M2, M3, M4, M5, M6, M7 |
+| R1 | M1, M2 |
+| R2 | M1 |
+| R3 | M1, M3, M4 |
+| R4 | M1, M2, M3, M6 |
+| R5 | M2, M6 |
+| R6 | M2, M3 |
+| R7 | M1, M5, M6 |
+| R8 | M1, M2, M3, M6 |
+| R9 | M1, M7 |
+| R10 | M1, M4 |
+| S1 | M3, M6, M7 |
+| S2 | M1, M6 |
+| S3 | M3 |
+| S4 | M7 |
