@@ -208,9 +208,14 @@ flowchart LR
 | `-workspace` | `AGYD_WORKSPACE` | current folder | Default folder for new conversations (real path, no symlinks) |
 | `-state-dir` | `AGYD_STATE_DIR` | `~/.config/agyd` | Directory holding `state.json` (must be absolute) |
 | `-permission-policy` | `AGYD_PERMISSION_POLICY` | `allow_all` | `allow_all` or `deny_all` for agent tool calls |
+| `-log-level` | `AGYD_LOG_LEVEL` | `info` | Log level: `debug`, `info`, `warn`, or `error` (case-insensitive) |
 | `-agy` | `AGYD_AGY` | `agy` | Path to the `agy` binary |
 | `-acp-args` | `AGYD_ACP_ARGS` | `acp` | Space-separated arguments forwarded to the `agy` binary |
 
+- **`-log-level` / `AGYD_LOG_LEVEL`:** defaults to `info`. Configures structured JSON logging to `stdout` (`debug`, `info`, `warn`, or `error`; case-insensitive). Any invalid value exits 1 immediately with a `"configuration error"` log message.
+  - **`INFO` (default):** logs startup `settings` (including `logLevel`), `/v1/*` and error (`4xx`/`5xx`) `"http request"` access logs (`method`, `path`, `status`, `durationMs`, optional `conversationId`, `canceled`), metadata-only `"prompt started"` and `"prompt finished"` turn events (`conversationId`, `model`, `thinkingLevel`, `mode`, `stream`, `stopReason`, `durationMs`, `updates`, `totalTokens`), conversation lifecycle events (`conversation created`, `conversation cleared`, `conversation switched`, `conversation updated`, `conversation deleted`, `defaults updated`), and ACP subprocess lifecycle (`acp process started`, `acp process stopped`, `acp process exited unexpectedly` at `WARN`).
+  - **`DEBUG`:** additionally emits `2xx`/`3xx` quiet-route access logs (`/healthz`, `/`, `/docs`, `/openapi.json`, `/static/*`) and child process `acp stderr` output.
+  - **Strict privacy rule:** prompt text, reply text, tool-call arguments, query strings, and raw ACP `session/update` payloads are never logged at any level.
 - **`-acp-args` / `AGYD_ACP_ARGS`:** defaults to `acp`. Space-separated arguments forwarded directly to the `agy` binary — for example, `agyd -acp-args "acp --..."` when you need to pass extra flags to `agy`.
 - **`state.json`:** lives in `AGYD_STATE_DIR` (must be an absolute path when set), else `$XDG_CONFIG_HOME/agyd/` (when absolute), else `~/.config/agyd/`. It is flat, holding `currentConversationId`, `defaults` (`model`, `thinkingLevel`, `mode`), and `conversations` (remembered folders and settings). It is written atomically via temp file + sync + rename with mode `0600` (directory `0700`) and read non-blocking (`O_NONBLOCK`) as a regular file capped at 4 MiB.
 - **Saved defaults:** written to `state.json` by the startup question, `agyd defaults --model ...`, and `PUT /v1/defaults`. Startup flags or environment variables override saved defaults for the running process without overwriting `state.json` on disk.
