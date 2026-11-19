@@ -241,7 +241,7 @@ func (c *Client) handleSessionUpdate(p *folderProc, rawParams json.RawMessage) {
 	c.applySettingsUpdate(up.SessionID, entry, env)
 	sub, ok := c.inFlight[up.SessionID]
 	if ok {
-		if sub.onUpdate == nil {
+		if sub.onUpdate == nil && len(up.Update) > 0 {
 			sub.updates = append(sub.updates, up.Update)
 		}
 		if env.SessionUpdate == "agent_message_chunk" && env.Content.Type == "text" {

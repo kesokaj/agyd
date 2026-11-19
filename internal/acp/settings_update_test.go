@@ -78,6 +78,32 @@ func TestSettingsUpdatesFromAgent(t *testing.T) {
 	if sub.text.String() != "" || len(sub.updates) != 0 {
 		t.Errorf("foreign proc injected prompt output %q (%d updates)", sub.text.String(), len(sub.updates))
 	}
+
+	// Buffered updates from the owning folder proc preserve multiple verbatim ACP
+	// updates in arrival order, keep agent_message_chunk text raw without trimming,
+	// and skip malformed notifications that omit the "update" field.
+	c.handleSessionUpdate(owner, json.RawMessage(`{"sessionId":"s1"}`))
+
+	wantUpdates := []string{
+		`{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"plan step 1"}}`,
+		`{"sessionUpdate":"tool_call","toolCallId":"tc_1","kind":"read","title":"Read README.md","status":"in_progress"}`,
+		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"  Raw line 1\n\nLine 2  "}}`,
+	}
+	for _, u := range wantUpdates {
+		c.handleSessionUpdate(owner, json.RawMessage(`{"sessionId":"s1","update":`+u+`}`))
+	}
+
+	if len(sub.updates) != len(wantUpdates) {
+		t.Fatalf("len(sub.updates) = %d, want %d (got %v)", len(sub.updates), len(wantUpdates), sub.updates)
+	}
+	for i, want := range wantUpdates {
+		if got := string(sub.updates[i]); got != want {
+			t.Errorf("sub.updates[%d] = %s, want %s", i, got, want)
+		}
+	}
+	if wantText := "  Raw line 1\n\nLine 2  "; sub.text.String() != wantText {
+		t.Errorf("sub.text = %q, want %q", sub.text.String(), wantText)
+	}
 }
 
 func mustGet(t *testing.T, c *Client, id string) SessionInfo {

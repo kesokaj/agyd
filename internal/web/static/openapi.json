@@ -251,7 +251,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "Sent when the request has `Accept: text/event-stream`. Events: session_update (raw ACP session update), prompt_done (PromptResult without updates), prompt_error (Error envelope)."
+                  "description": "Sent when the request has Accept: text/event-stream. Events: session_update (verbatim ACP v1 session/update params object), prompt_done (PromptResult without updates), prompt_error (Error envelope)."
                 }
               }
             }
@@ -723,7 +723,7 @@
               "text/event-stream": {
                 "schema": {
                   "type": "string",
-                  "description": "Sent when the request has `Accept: text/event-stream`. Events: session_update (raw ACP session update), prompt_done (PromptResult without updates), prompt_error (Error envelope)."
+                  "description": "Sent when the request has Accept: text/event-stream. Events: session_update (verbatim ACP v1 session/update params object), prompt_done (PromptResult without updates), prompt_error (Error envelope)."
                 }
               }
             }
@@ -1241,6 +1241,13 @@
       },
       "PromptResult": {
         "type": "object",
+        "description": "Buffered prompt turn result wrapping ACP v1 verbatim.",
+        "required": [
+          "conversationId",
+          "stopReason",
+          "text",
+          "updates"
+        ],
         "properties": {
           "conversationId": {
             "type": "string"
@@ -1258,10 +1265,12 @@
             "type": "string"
           },
           "text": {
-            "type": "string"
+            "type": "string",
+            "description": "Concatenated text from ACP agent_message_chunk updates, verbatim (never stripped or rewritten)."
           },
           "updates": {
             "type": "array",
+            "description": "Verbatim ACP v1 session/update objects in arrival order. Always serialized as an array ([] when empty) on buffered JSON responses; omitted on SSE prompt_done events.",
             "items": {
               "type": "object",
               "additionalProperties": true
@@ -1269,6 +1278,7 @@
           },
           "usage": {
             "type": "object",
+            "description": "Verbatim ACP v1 usage object from session/prompt result, when reported by agy.",
             "additionalProperties": true
           }
         }

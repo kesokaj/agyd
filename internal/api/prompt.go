@@ -16,30 +16,45 @@ type promptRequest struct {
 	Prompt string `json:"prompt"`
 }
 
-// promptResponse is a finished turn plus the conversation and settings it
-// ran with (D5).
-type promptResponse struct {
-	ConversationID string            `json:"conversationId"`
-	Model          string            `json:"model,omitempty"`
-	ThinkingLevel  string            `json:"thinkingLevel,omitempty"`
-	Mode           string            `json:"mode,omitempty"`
-	StopReason     string            `json:"stopReason"`
-	Text           string            `json:"text"`
-	Updates        []json.RawMessage `json:"updates,omitempty"`
-	Usage          json.RawMessage   `json:"usage,omitempty"`
+// promptDoneResponse is the terminal turn payload shared by SSE prompt_done
+// events and buffered responses (D5, ADR-007).
+type promptDoneResponse struct {
+	ConversationID string          `json:"conversationId"`
+	Model          string          `json:"model,omitempty"`
+	ThinkingLevel  string          `json:"thinkingLevel,omitempty"`
+	Mode           string          `json:"mode,omitempty"`
+	StopReason     string          `json:"stopReason"`
+	Text           string          `json:"text"`
+	Usage          json.RawMessage `json:"usage,omitempty"`
 }
 
-func newPromptResponse(info acp.SessionInfo, res acp.PromptResult) promptResponse {
+// promptResponse is a buffered turn result wrapping ACP v1 verbatim (ADR-007).
+type promptResponse struct {
+	promptDoneResponse
+	Updates []json.RawMessage `json:"updates"`
+}
+
+func newPromptDoneResponse(info acp.SessionInfo, res acp.PromptResult) promptDoneResponse {
 	set := conversation.SettingsOf(info)
-	return promptResponse{
+	return promptDoneResponse{
 		ConversationID: info.SessionID,
 		Model:          set.Model,
 		ThinkingLevel:  set.ThinkingLevel,
 		Mode:           set.Mode,
 		StopReason:     res.StopReason,
 		Text:           res.Text,
-		Updates:        res.Updates,
 		Usage:          res.Usage,
+	}
+}
+
+func newPromptResponse(info acp.SessionInfo, res acp.PromptResult) promptResponse {
+	updates := res.Updates
+	if updates == nil {
+		updates = []json.RawMessage{}
+	}
+	return promptResponse{
+		promptDoneResponse: newPromptDoneResponse(info, res),
+		Updates:            updates,
 	}
 }
 
@@ -134,9 +149,7 @@ func (s *server) streamPromptSSE(w http.ResponseWriter, r *http.Request, info ac
 		return nil
 	}
 
-	done := newPromptResponse(info, res)
-	done.Updates = nil // already streamed as session_update events
-	doneBytes, _ := json.Marshal(done)
+	doneBytes, _ := json.Marshal(newPromptDoneResponse(info, res))
 	sendEvent("prompt_done", doneBytes)
 	return nil
 }

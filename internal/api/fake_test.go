@@ -174,6 +174,29 @@ func (f *fakeACPService) Prompt(ctx context.Context, id string, blocks []acp.Con
 		case <-ctx.Done():
 			return acp.PromptResult{}, ctx.Err()
 		}
+	case "empty_updates":
+		return acp.PromptResult{SessionID: id, StopReason: "end_turn", Text: "", Updates: nil}, nil
+	case "multi_updates":
+		updates := []json.RawMessage{
+			json.RawMessage(`{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"plan step 1"}}`),
+			json.RawMessage(`{"sessionUpdate":"tool_call","toolCallId":"tc_1","kind":"read","title":"Read README.md","status":"in_progress"}`),
+			json.RawMessage(`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"  Raw line 1\n\nLine 2  "}}`),
+		}
+		usage := json.RawMessage(`{"input":12,"output":7}`)
+		res := acp.PromptResult{
+			SessionID:  id,
+			StopReason: "end_turn",
+			Text:       "  Raw line 1\n\nLine 2  ",
+			Usage:      usage,
+		}
+		if onUpdate != nil {
+			for _, u := range updates {
+				onUpdate([]byte(`{"sessionId":"` + id + `","update":` + string(u) + `}`))
+			}
+			return res, nil
+		}
+		res.Updates = updates
+		return res, nil
 	}
 	upd := `{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"Hello from ACP"}}`
 	if onUpdate != nil {

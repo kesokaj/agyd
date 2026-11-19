@@ -1,7 +1,9 @@
 package api
 
 import (
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -89,15 +91,198 @@ func TestPromptSSEAndErrors(t *testing.T) {
 	})
 }
 
+func TestPromptVerbatimACPEnvelope(t *testing.T) {
+	wantUpdates := []string{
+		`{"sessionUpdate":"agent_thought_chunk","content":{"type":"text","text":"plan step 1"}}`,
+		`{"sessionUpdate":"tool_call","toolCallId":"tc_1","kind":"read","title":"Read README.md","status":"in_progress"}`,
+		`{"sessionUpdate":"agent_message_chunk","content":{"type":"text","text":"  Raw line 1\n\nLine 2  "}}`,
+	}
+	wantText := "  Raw line 1\n\nLine 2  "
+	wantUsage := `{"input":12,"output":7}`
+
+	for _, ep := range []struct {
+		name string
+		byID bool
+	}{
+		{name: "current", byID: false},
+		{name: "by_id", byID: true},
+	} {
+		t.Run(ep.name, func(t *testing.T) {
+			setup := func(t *testing.T) (*testEnv, string, func() string) {
+				t.Helper()
+				e := newTestEnv(t)
+				if ep.byID {
+					id := decode[map[string]any](t, e.do(http.MethodPost, "/v1/conversations", `{}`))["conversationId"].(string)
+					return e, "/v1/conversations/" + id + "/prompt", func() string { return id }
+				}
+				return e, "/v1/prompt", e.mgr.CurrentID
+			}
+
+			t.Run("buffered_empty_updates", func(t *testing.T) {
+				e, path, wantID := setup(t)
+				rec := e.do(http.MethodPost, path, `{"prompt":"empty_updates"}`)
+				want(t, rec, http.StatusOK, "")
+
+				fields := decodeRawObject(t, rec.Body.Bytes())
+				assertPromptMetadata(t, fields, wantID(), "", "")
+				rawUpdates, ok := fields["updates"]
+				if !ok || string(rawUpdates) != "[]" {
+					t.Errorf("buffered empty updates = %q (present=%v), want []", string(rawUpdates), ok)
+				}
+			})
+
+			t.Run("buffered_multi_updates", func(t *testing.T) {
+				e, path, wantID := setup(t)
+				rec := e.do(http.MethodPost, path, `{"prompt":"multi_updates"}`)
+				want(t, rec, http.StatusOK, "")
+
+				fields := decodeRawObject(t, rec.Body.Bytes())
+				assertPromptMetadata(t, fields, wantID(), wantText, wantUsage)
+				var gotUpdates []json.RawMessage
+				if err := json.Unmarshal(fields["updates"], &gotUpdates); err != nil {
+					t.Fatalf("unmarshal updates: %v", err)
+				}
+				if len(gotUpdates) != len(wantUpdates) {
+					t.Fatalf("len(updates) = %d, want %d", len(gotUpdates), len(wantUpdates))
+				}
+				for i, want := range wantUpdates {
+					if got := string(gotUpdates[i]); got != want {
+						t.Errorf("updates[%d] = %s, want %s", i, got, want)
+					}
+				}
+			})
+
+			t.Run("sse_multi_updates", func(t *testing.T) {
+				e, path, wantID := setup(t)
+				rec := e.do(http.MethodPost, path, `{"prompt":"multi_updates"}`, "Accept", "text/event-stream")
+				want(t, rec, http.StatusOK, "")
+
+				events := parseSSE(t, rec.Body.String())
+				if len(events) != len(wantUpdates)+1 {
+					t.Fatalf("len(events) = %d, want %d:\n%s", len(events), len(wantUpdates)+1, rec.Body.String())
+				}
+				id := wantID()
+				for i, u := range wantUpdates {
+					wantData := `{"sessionId":"` + id + `","update":` + u + `}`
+					if events[i].event != "session_update" || events[i].data != wantData {
+						t.Errorf("event[%d] = (%q, %s), want (session_update, %s)", i, events[i].event, events[i].data, wantData)
+					}
+				}
+				assertPromptDoneSSE(t, events[len(wantUpdates)], id, wantText, wantUsage)
+			})
+
+			t.Run("sse_empty_updates", func(t *testing.T) {
+				e, path, wantID := setup(t)
+				rec := e.do(http.MethodPost, path, `{"prompt":"empty_updates"}`, "Accept", "text/event-stream")
+				want(t, rec, http.StatusOK, "")
+
+				events := parseSSE(t, rec.Body.String())
+				if len(events) != 1 {
+					t.Fatalf("len(events) = %d, want 1 (%+v)", len(events), events)
+				}
+				assertPromptDoneSSE(t, events[0], wantID(), "", "")
+			})
+		})
+	}
+}
+
+type sseEvent struct {
+	event string
+	data  string
+}
+
+func parseSSE(t *testing.T, body string) []sseEvent {
+	t.Helper()
+	var out []sseEvent
+	for _, block := range strings.Split(body, "\n\n") {
+		if strings.TrimSpace(block) == "" {
+			continue
+		}
+		var ev sseEvent
+		for _, line := range strings.Split(block, "\n") {
+			if v, ok := strings.CutPrefix(line, "event: "); ok {
+				ev.event = v
+			} else if v, ok := strings.CutPrefix(line, "data: "); ok {
+				ev.data = v
+			}
+		}
+		out = append(out, ev)
+	}
+	return out
+}
+
+func decodeRawObject(t *testing.T, data []byte) map[string]json.RawMessage {
+	t.Helper()
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		t.Fatalf("unmarshal object %s: %v", data, err)
+	}
+	return fields
+}
+
+func decodeStringField(t *testing.T, fields map[string]json.RawMessage, key string) string {
+	t.Helper()
+	raw, ok := fields[key]
+	if !ok {
+		t.Fatalf("missing JSON field %q in %v", key, fields)
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		t.Fatalf("unmarshal field %q (%s): %v", key, raw, err)
+	}
+	return s
+}
+
+func assertPromptDoneSSE(t *testing.T, ev sseEvent, wantID, wantText, wantUsage string) {
+	t.Helper()
+	if ev.event != "prompt_done" {
+		t.Fatalf("event = %q, want prompt_done", ev.event)
+	}
+	fields := decodeRawObject(t, []byte(ev.data))
+	if raw, ok := fields["updates"]; ok {
+		t.Errorf("prompt_done unexpectedly contains updates: %s", raw)
+	}
+	assertPromptMetadata(t, fields, wantID, wantText, wantUsage)
+}
+
+func assertPromptMetadata(t *testing.T, fields map[string]json.RawMessage, wantID, wantText, wantUsage string) {
+	t.Helper()
+	if raw, ok := fields["output"]; ok {
+		t.Errorf("unexpected custom output field: %s", raw)
+	}
+	if wantID == "" {
+		t.Fatal("expected non-empty conversationId")
+	}
+	for _, tc := range []struct{ key, want string }{
+		{"conversationId", wantID},
+		{"model", "gemini-4-carbon"},
+		{"thinkingLevel", "medium"},
+		{"mode", "default"},
+		{"stopReason", "end_turn"},
+		{"text", wantText},
+	} {
+		if got := decodeStringField(t, fields, tc.key); got != tc.want {
+			t.Errorf("%s = %q, want %q", tc.key, got, tc.want)
+		}
+	}
+	if wantUsage == "" {
+		if raw, ok := fields["usage"]; ok {
+			t.Errorf("unexpected usage field: %s", raw)
+		}
+	} else if raw, ok := fields["usage"]; !ok || string(raw) != wantUsage {
+		t.Errorf("usage = %s (present=%v), want %s", raw, ok, wantUsage)
+	}
+}
+
 func TestCancelEndpoints(t *testing.T) {
 	e := newTestEnv(t)
 
 	want(t, e.do(http.MethodPost, "/v1/cancel", ""), http.StatusNotFound, "NO_CURRENT_CONVERSATION")
 
 	id := decode[map[string]any](t, e.do(http.MethodPost, "/v1/conversations", `{}`))["conversationId"].(string)
-	done := make(chan int, 1)
+	done := make(chan *httptest.ResponseRecorder, 1)
 	go func() {
-		done <- e.do(http.MethodPost, "/v1/prompt", `{"prompt":"block_until_cancel"}`).Code
+		done <- e.do(http.MethodPost, "/v1/prompt", `{"prompt":"block_until_cancel"}`)
 	}()
 	e.svc.waitInFlight(t, id)
 
@@ -108,8 +293,16 @@ func TestCancelEndpoints(t *testing.T) {
 	if !strings.Contains(rec.Body.String(), `"conversationId":"`+id+`"`) || !strings.Contains(rec.Body.String(), "CANCEL_REQUESTED") {
 		t.Errorf("cancel body = %s", rec.Body)
 	}
-	if code := <-done; code != http.StatusOK {
-		t.Errorf("cancelled prompt status = %d, want 200", code)
+	cancelledRec := <-done
+	if cancelledRec.Code != http.StatusOK {
+		t.Fatalf("cancelled prompt status = %d, want 200", cancelledRec.Code)
+	}
+	fields := decodeRawObject(t, cancelledRec.Body.Bytes())
+	if got := decodeStringField(t, fields, "stopReason"); got != "cancelled" {
+		t.Errorf("cancelled stopReason = %q, want cancelled", got)
+	}
+	if rawUpdates, ok := fields["updates"]; !ok || string(rawUpdates) != "[]" {
+		t.Errorf("cancelled updates = %q (present=%v), want []", string(rawUpdates), ok)
 	}
 
 	want(t, e.do(http.MethodPost, "/v1/conversations/unknown/cancel", ""), http.StatusNotFound, "CONVERSATION_NOT_FOUND")
