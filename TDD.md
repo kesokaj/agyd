@@ -1,13 +1,13 @@
 # TDD — agyd
 
-Technical design for `cmd/agyd` (serve and client), `internal/acp`, `internal/api`, `internal/web`, `internal/config` and `internal/conversation`, linking each component to its verification tests.
+Technical design for `cmd/agyd` (serve and control-plane CLI), `internal/acp`, `internal/api`, `internal/web`, `internal/config`, and `internal/conversation`, linking each component to its verification tests.
 Status: agreed · Last updated: 2026-11-19 · Requirements: [PRD.md](PRD.md) · Design: [SDD.md](SDD.md)
 
 ## T1 — `cmd/agyd` serve (entry point, config, startup)
 
 Implements: M1 · Decisions: `ADR-004`, `ADR-005`, `ADR-006`
 
-The first argument picks the mode: none, a flag, or `serve` starts the server; a known command name runs the client (T7). Serve resolves settings through flags and `AGYD_*` env vars, falling back to saved defaults in `state.json` (for model, thinking, mode), then built-in defaults. It validates settings, binds the listen socket (`8080` then `3000` when unset; an explicit `-port` or `AGYD_PORT` never falls back), initializes the lazy per-folder ACP client without eagerly spawning a process, runs `Manager.Startup` (60 s), composes `internal/web` and `internal/api` under `api.Guard`, and shuts down all folder children on `SIGINT`/`SIGTERM`.
+The first argument picks the mode: none, a flag, or `serve` starts the server; a known control-plane command runs the CLI (T7). Serve resolves settings through flags and `AGYD_*` env vars, falling back to saved defaults in `state.json` (for model, thinking, mode), then built-in defaults. It validates settings, binds the listen socket (`8080` then `3000` when unset; an explicit `-port` or `AGYD_PORT` never falls back), initializes the lazy per-folder ACP client without eagerly spawning a process, runs `Manager.Startup` (60 s), composes `internal/web` and `internal/api` under `api.Guard`, and shuts down all folder children on `SIGINT`/`SIGTERM`.
 
 - **Interfaces:** flags `-host`, `-port`, `-workspace`, `-state-dir`, `-permission-policy`, `-agy`, `-acp-args`, `-model`, `-thinking`, `-mode`, `-no-prompt`, `-h`; each has an `AGYD_*` env twin. Precedence: flags > `AGYD_*` env vars > saved defaults in `state.json` > built-in defaults.
 - **Startup picker** (`picker.go`, `startup.go`, `tty_*.go`): runs only on a real terminal (`TIOCGETA`/`TIOCGWINSZ` ioctl, never `/dev/null`), with agy ready, when no flag, env var, or saved default set a model and `-no-prompt` is off. It offers agy's models and thinking levels and, on "save", writes them to `state.json` defaults via Manager.
@@ -26,11 +26,12 @@ Supervises one `agy acp` subprocess (`folderProc` in `proc.go`) per workspace fo
 
 ## T3 — `internal/api` (REST + SSE handlers, guard)
 
-Implements: M3 · Decisions: `ADR-005`, `ADR-006`
+Implements: M3 · Decisions: `ADR-005`, `ADR-006`, `ADR-007`
 
 Serves `/healthz` (`200 {"service":"agyd"}`), `/v1/status`, `/v1/current` (GET, PATCH), `/v1/prompt`, `/v1/cancel`, `/v1/clear` (POST -> `201`), `/v1/conversations` (POST, GET), `/v1/conversations/{conversationId}` (GET, PATCH, DELETE) with `/prompt`, `/cancel`, `/use`, `/clear` (POST -> `201`), `/v1/models`, and `/v1/defaults` (GET, PUT; PUT persists to `state.json`). Handlers call the `conversation.Manager`; prompts and cancels go to `acp.Service`.
 
 - **Interfaces:** `NewHandler(log, svc acp.Service, mgr *conversation.Manager, cfg Config) http.Handler` (`Config.ExtraRoutes` mounts non-API routes such as `web.Routes()` on the same mux and method table so wrong methods return JSON `405 METHOD_NOT_ALLOWED` with `Allow`); `Routes() []Route` (checked against `openapi.json`, excluding `ExtraRoutes`); `Guard(next, extraHosts...)` (Host allowlist, `403 FORBIDDEN_HOST`, `http.CrossOriginProtection`).
+- **Prompt envelope (`ADR-007`):** `POST /v1/prompt` and `POST /v1/conversations/{conversationId}/prompt` strictly wrap ACP v1 verbatim without inventing a custom `output.items` taxonomy or stripping/rewriting `agy` text (`text` is the verbatim concatenation of `agent_message_chunk` text chunks). Buffered JSON returns `promptResponse`, always serializing `updates` as a JSON array (`[]` when empty, never `null` and never omitted) alongside `conversationId`, `model`, `thinkingLevel`, `mode`, `stopReason`, `text`, and `usage`. SSE (`Accept: text/event-stream`) streams verbatim `session_update` events in arrival order and ends with `prompt_done` encoded via `promptDoneResponse` (omitting `updates`), or `prompt_error` on failure.
 - **Headers:** `Agyd-Conversation`, `Agyd-Model`, `Agyd-Thinking-Level`, `Agyd-Mode` on every `/healthz` and `/v1/*` response (empty values omitted).
 - **Errors:** AIP-193 envelope with `ErrorInfo.reason` in domain `agyd.local`. New reasons: `CONVERSATION_NOT_FOUND`, `NO_CURRENT_CONVERSATION`, `INVALID_SETTING` (format, unknown to agy, or agy `-32602`), `MODELS_UNKNOWN`. Existing: `PROMPT_IN_FLIGHT`, `INVALID_CWD` (also a `cwd` that is not an existing real directory, contains a symlink — naming the real path — or has any `.gemini` segment in any letter case), `MALFORMED_BODY` (also trailing data after the value), `ACP_*`, `UNAVAILABLE`, `FORBIDDEN_HOST`. Surface hardening: `METHOD_NOT_ALLOWED` (405 + `Allow`, from the route table), `BODY_TOO_LARGE` (413), `CROSS_ORIGIN_REQUEST` (403, CSRF deny handler). A handler error caused by the client disconnecting writes nothing and logs at INFO (`client closed request`). Pinned by `internal/api/errors_test.go`.
 - **Limits:** request bodies 1 MiB (`413 BODY_TOO_LARGE`); `PATCH`/`DELETE` during a turn are `409 PROMPT_IN_FLIGHT`.
@@ -44,6 +45,8 @@ Serves the vendored Swagger UI 5.35.0 and the hand-written OpenAPI 3.1 spec via 
 ## T5 — `internal/config` (state directory, validation, state store)
 
 Implements: M5 · Decisions: `ADR-006`
+
+Owns state directory resolution, setting value validation, and atomic persistence of the flat `state.json` snapshot.
 
 - **Interfaces:** `StateDir(getenv)` resolves the directory holding `state.json`: `AGYD_STATE_DIR` (must be an absolute path when set), else `$XDG_CONFIG_HOME/agyd` (when absolute), else `~/.config/agyd`. `ValidSettingValue(v)` checks `^[A-Za-z0-9._-]{1,64}$`. `NewStateStore(dir)` returns a `*StateStore` backed by `<dir>/state.json`.
 - **Schema:** flat `State` struct holding `CurrentConversationID`, `Defaults` (`Settings`), and `Conversations` (`map[string]ConversationRecord{cwd, model, thinkingLevel, mode}`). Legacy files with an `"instances"` key load as an empty `State`.
@@ -60,15 +63,15 @@ Implements: M6 · Decisions: `ADR-005`, `ADR-006`
 - **Concurrency:** `opMu` serializes pointer and settings changes (create, clear, use, resume, update, delete); `saveMu` serializes full `state.json` snapshots and disk writes (lock order: `opMu -> saveMu -> mu`). Startup flag/env `Defaults` override saved `state.json` defaults for the running process without overwriting saved defaults on disk.
 - **Errors:** `ErrNoCurrent`, `ErrInvalidSetting`, `ErrNoModels`, plus the `acp` errors. Deleting a current conversation agy no longer has still clears the pointer.
 
-## T7 — `cmd/agyd` client (`agyd ask` and friends)
+## T7 — `cmd/agyd` control-plane CLI
 
-Implements: M7 · Decisions: `ADR-005`, `ADR-006`
+Implements: M7 · Decisions: `ADR-005`, `ADR-006`, `ADR-007`
 
-`ask`, `new`, `clear`, `list`, `use`, `current`, `model`, `models`, `defaults`, `help`: a stdlib HTTP client of a running agyd.
+`current`, `list`, `new`, `use`, `clear`, `model`, `models`, `defaults`, and `help` form a thin stdlib HTTP control-plane CLI backed 1:1 by `/v1/*`, with readable text/table output by default and `--json` for scripts. The removed `ask` subcommand is rejected as an unknown command (exit `2`), and the CLI includes no SSE client or stdin prompt handling.
 
 - **Base URL:** `--host`/`--port` > `AGYD_URL` > `AGYD_HOST`/`AGYD_PORT` > `/healthz` probe on `8080` then `3000` (`cli_target.go`; 1 s per-probe timeout, requires `200` `application/json` `{"service":"agyd"}`; neither `config.env` nor `./.env` are read); `0.0.0.0`/`::` dial loopback.
-- **Output:** one stderr info line (`agyd: conversation=... model=... thinking=... mode=...`) from the `Agyd-*` headers; `ask` streams SSE text to stdout and reads the prompt from stdin when none is given; `agyd defaults --model ...` prints `(saved to state.json)`; `--json` prints the raw response.
-- **Errors:** usage errors send nothing (exit 2); a non-2xx prints the AIP-193 message (exit 1); an unreachable server names the URL. The client never follows redirects.
+- **Output:** readable text/table output on stdout by default, one stderr info line (`agyd: conversation=... model=... thinking=... mode=...`) from the `Agyd-*` headers, `(saved to state.json)` on `agyd defaults --model ...`, and `--json` to print the raw API response for scripts.
+- **Errors:** unknown commands (including `ask`) and usage errors send nothing (exit `2`); a non-2xx prints the AIP-193 message (exit `1`); an unreachable server names the URL. The client never follows redirects.
 
 ## Data model
 
@@ -92,8 +95,8 @@ Every component in `SDD.md` maps to its technical design section and test suite.
 |---|---|---|
 | M1 | T1 | `TestConfigFromEnvAndFlags`, `TestListenServeFallback`, `TestServeExplicitPortInUse`, `TestRunLogsFallbackAndNonLoopbackWarningsAtBind`, `TestWorkspaceRejectsSymlinks`, `TestDispatchServeVersusClient`, `TestPickDefaults`, `TestPickDefaultsWithoutOptions`, `TestWantPicker`, `TestFileIsTerminal`, `TestRestartPreservesStateAcrossSIGTERM`, `TestServerPerFolderIsolationAndStateRouting`, `TestServerClearReusesFolderProcAndPreservesSettings`, `TestMuxIsGuarded`, `TestMuxUnknownPathJSON`, `TestMuxWebRoutesMethodNotAllowed`, `TestListenNetwork`, `TestExposedHosts`, `TestLocalURL`, `TestWildcardV4DoesNotListenOnV6` |
 | M2 | T2 | `TestClientInitializeAndSessionLifecycle`, `TestClientPromptStreamingAndPermission`, `TestClientCancelAndCrashRecovery`, `TestSessionConfigOptions`, `TestListAndResumeAgentSessions`, `TestSessionRejectsSymlinkCwd`, `TestSetConfigAndCloseRefusedDuringTurn`, `TestParseConfigOptionsSkipsUnknownShapes`, `TestPermissionDecisionLogged`, `TestPermissionDecisionMalformedAndOversized`, `TestAgentRequestRejectsForeignSession`, `TestClipBoundsAndSanitizes`, `TestUnsupportedAgentRequestLogged`, `TestPerFolderProcessIsolation`, `TestRelativeBinaryNotHijackedByWorkspaceDir`, `TestConcurrentFolderProcessLifecycle`, `TestApplySettingsUpdateFromStream` |
-| M3 | T3 | `TestStatusAndHealthEndpoints`, `TestCreateConversation`, `TestClearEndpoints`, `TestListAndGetConversations`, `TestPatchSettings`, `TestDeleteCurrentClearsPointer`, `TestUseSwitchesPromptTarget`, `TestPatchAndDeleteDuringTurn`, `TestPromptCurrentAutoCreates`, `TestPromptSSEAndErrors`, `TestCancelEndpoints`, `TestHeadersOnEveryResponse`, `TestDefaultsRoundTrip`, `TestDefaultsRejectInjection`, `TestModels`, `TestClassifyErrorMapping`, `TestErrorShapes`, `TestExtraRoutesMethodTable`, `TestCwdRejectsSymlinks`, `TestCrossOriginRefusalIsJSON`, `TestClientClosedRequestIsNotAServerError`, `TestGuard`, `TestGuardExtraHosts` |
+| M3 | T3 | `TestStatusAndHealthEndpoints`, `TestCreateConversation`, `TestClearEndpoints`, `TestListAndGetConversations`, `TestPatchSettings`, `TestDeleteCurrentClearsPointer`, `TestUseSwitchesPromptTarget`, `TestPatchAndDeleteDuringTurn`, `TestPromptCurrentAutoCreates`, `TestPromptVerbatimACPEnvelope`, `TestPromptSSEAndErrors`, `TestCancelEndpoints`, `TestHeadersOnEveryResponse`, `TestDefaultsRoundTrip`, `TestDefaultsRejectInjection`, `TestModels`, `TestClassifyErrorMapping`, `TestErrorShapes`, `TestExtraRoutesMethodTable`, `TestCwdRejectsSymlinks`, `TestCrossOriginRefusalIsJSON`, `TestClientClosedRequestIsNotAServerError`, `TestGuard`, `TestGuardExtraHosts` |
 | M4 | T4 | `TestWebRoutes`, `TestOpenAPIRoutesMatchAPI` |
 | M5 | T5 | `TestStateDir`, `TestValidSettingValue`, `TestStateStoreFlatSchemaAndPermissions`, `TestStateStoreUpgradesLegacyInstancesFileAsEmpty`, `TestStateStoreCorruptAndValidationErrors`, `TestStateStoreRefusesFIFOWithoutBlocking`, `TestStateStoreConcurrentSaves`, `TestStateStoreValidationAndSymlinkHardening` |
 | M6 | T6 | `TestStartupCreatesAndSavesState`, `TestStartupResumesFromStateAndReappliesSettings`, `TestStartupFallsBackToFresh`, `TestStartupLogsRejectedDefault`, `TestStartupNilStateAndSettingsOfSanitizes`, `TestResolveConcurrentEmptyPointerCreatesOne`, `TestResolveResumesCurrentAfterAgentRestart`, `TestResolveExplicitIDIsLiveOnly`, `TestClearCurrentPreservesFolderAndSettings`, `TestClearByIDLiveRememberedAndHistory`, `TestClearErrorsAndConcurrency`, `TestUseSwitchesAndResumes`, `TestResumeRoutesFromStateFolderAndFallback`, `TestCreateSettingsAreStrict`, `TestUpdateAndDelete`, `TestUpdateRereadsAfterLock`, `TestDeleteNonLiveCurrentClearsPointer`, `TestSetDefaultsAndCreateSerializeStateSnapshots`, `TestModelsFollowLiveCurrent`, `TestDefaultsAndModels`, `TestListMergesLiveAndHistory`, `TestConcurrentUseAndPrompt` |
-| M7 | T7 | `TestCLIAskStreaming`, `TestCLICommandsHitTheirEndpoints`, `TestClientBaseURL`, `TestCLIProbeDiscovery`, `TestClientHelp`, `TestCLIErrorsShowInfoLineAndEnvelope`, `TestCLIJSONPrintsTheRawResponse`, `TestCLIUnreachableServer`, `TestCLIUsageErrorsSendNothing`, `TestCLIDoesNotFollowRedirects`; live smoke 1-6 (`GUIDE-testing`) |
+| M7 | T7 | `TestCLICommandsHitTheirEndpoints`, `TestClientBaseURL`, `TestCLIProbeDiscovery`, `TestClientHelp`, `TestCLIErrorsShowInfoLineAndEnvelope`, `TestCLIJSONPrintsTheRawResponse`, `TestCLIUnreachableServer`, `TestCLIUsageErrorsSendNothing`, `TestCLIDoesNotFollowRedirects`; live smoke 1-6 (`GUIDE-testing`) |
